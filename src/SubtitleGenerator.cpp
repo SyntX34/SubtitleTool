@@ -34,7 +34,11 @@ SubtitleGenerator::~SubtitleGenerator() {
 void SubtitleGenerator::initWhisper() {
     cleanupWhisper();
     struct whisper_context_params cparams = whisper_context_default_params();
+#if defined(SUBGEN_HAVE_CUDA) || defined(SUBGEN_HAVE_METAL)
     cparams.use_gpu = true;
+#else
+    cparams.use_gpu = false;
+#endif
 
     m_whisper_ctx = whisper_init_from_file_with_params(
         m_config.model_path.c_str(), cparams);
