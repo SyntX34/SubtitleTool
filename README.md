@@ -34,7 +34,7 @@ A high-performance C++ subtitle generator built on [whisper.cpp](https://github.
 | GPU backend | CUDA Toolkit (optional) | CUDA Toolkit (optional) | Metal (built into the OS) |
 | FFmpeg (optional, for non-WAV input) | via [vcpkg](https://github.com/microsoft/vcpkg) | `apt install libavformat-dev ...` | `brew install ffmpeg` |
 
-> GPU acceleration is **entirely automatic**. If a CUDA toolkit is present at *build* time, the binary is built with CUDA support; if a compatible NVIDIA GPU is present at *run* time, it's used. If either isn't there, the program runs on CPU without any flags or configuration from you.
+> GPU acceleration is **detected at build time**. If the CUDA toolkit (or Metal on macOS) is present when you run CMake, the binary is built with GPU support; otherwise it falls back to CPU. To enable GPU acceleration, install the CUDA toolkit from [nvidia.com](https://www.nvidia.com/Download/index.aspx) and rebuild.
 
 ---
 
