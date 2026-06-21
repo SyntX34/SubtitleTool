@@ -2,10 +2,10 @@
 
 A high-performance C++ subtitle generator built on [whisper.cpp](https://github.com/ggml-org/whisper.cpp), with automatic GPU acceleration and CPU fallback, multi-format audio/video input via FFmpeg, and built-in translation to English.
 
-[![Build](https://github.com/SyntX34/subtitle-generator/actions/workflows/build.yml/badge.svg)](https://github.com/SyntX34/subtitle-generator/actions/workflows/build.yml)
+[![Build](https://github.com/SyntX34/subtitle-generator/actions/workflows/build.yml/badge.svg)](https://github.com/SyntX34/SubtitleTool/actions/workflows/build.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Platforms](https://img.shields.io/badge/platform-Windows%20%7C%20Linux%20%7C%20macOS-informational)](#requirements)
-[![Releases](https://img.shields.io/github/v/release/SyntX34/subtitle-generator?include_prereleases)](https://github.com/SyntX34/subtitle-generator/releases)
+[![Releases](https://img.shields.io/github/v/release/SyntX34/subtitle-generator?include_prereleases)](https://github.com/SyntX34/SubtitleTool/releases)
 
 ---
 
@@ -87,7 +87,7 @@ cmake -B build -S . -DFORCE_CPU=ON
 ### 4. Run
 
 ```bash
-./build/subtitle_generator audio.wav -m models/ggml-base.en.bin -o subtitles.srt
+./build/SubtitleTool audio.wav -m models/ggml-base.en.bin -o subtitles.srt
 ```
 
 ---
@@ -95,7 +95,7 @@ cmake -B build -S . -DFORCE_CPU=ON
 ## 🛠️ Usage
 
 ```text
-subtitle_generator <audio_or_video_file> [OPTIONS]
+SubtitleTool <audio_or_video_file> [OPTIONS]
 
 MODEL
   -m, --model <path>      Whisper model (default: models/ggml-base.en.bin)
@@ -126,7 +126,7 @@ MISC
 
 ## 🌍 Language & Translation
 
-`subtitle_generator` separates **what language is spoken** from **what language you want the output in**:
+`SubtitleTool` separates **what language is spoken** from **what language you want the output in**:
 
 | Flag | Meaning |
 |---|---|
@@ -136,27 +136,27 @@ MISC
 **Example — Spanish video, English subtitles:**
 
 ```bash
-subtitle_generator pelicula.mp4 -l es --translate -o subtitles_en.srt
+SubtitleTool pelicula.mp4 -l es --translate -o subtitles_en.srt
 ```
 
 **Example — Japanese video, Japanese subtitles (no translation):**
 
 ```bash
-subtitle_generator anime.mkv -l ja -o subtitles_ja.srt
+SubtitleTool anime.mkv -l ja -o subtitles_ja.srt
 ```
 
 **Example — unknown language, transcribed in its original language:**
 
 ```bash
-subtitle_generator interview.wav -l auto -o subtitles.srt
+SubtitleTool interview.wav -l auto -o subtitles.srt
 ```
 
-To translate from a language that isn't English into a *third* language (e.g. Spanish → French), run `subtitle_generator` once to get an English transcript or translation, then run that text through a text translation tool — whisper.cpp's translation path is English-only by design.
+To translate from a language that isn't English into a *third* language (e.g. Spanish → French), run `SubtitleTool` once to get an English transcript or translation, then run that text through a text translation tool — whisper.cpp's translation path is English-only by design.
 
 See every supported language code:
 
 ```bash
-subtitle_generator --list-languages
+SubtitleTool --list-languages
 ```
 
 ---

@@ -19,28 +19,33 @@ jobs:
         with:
           submodules: recursive
 
-      - name: Install FFmpeg (vcpkg)
+      - name: Download prebuilt FFmpeg
+        shell: pwsh
         run: |
-          git clone https://github.com/microsoft/vcpkg.git C:\vcpkg
-          C:\vcpkg\bootstrap-vcpkg.bat
-          C:\vcpkg\vcpkg.exe install ffmpeg:x64-windows
+          $ErrorActionPreference = "Stop"
+          Invoke-WebRequest -Uri "https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-full-shared.7z" -OutFile "ffmpeg.7z"
+          7z x ffmpeg.7z -oC:\ffmpeg-extract | Out-Null
+          $dir = Get-ChildItem C:\ffmpeg-extract | Select-Object -First 1
+          Move-Item $dir.FullName C:\ffmpeg
+          echo "FFMPEG_ROOT=C:\ffmpeg" >> $env:GITHUB_ENV
 
       - name: Configure
         run: >
           cmake -B build -S .
           -DCMAKE_BUILD_TYPE=${{ env.BUILD_TYPE }}
-          -DCMAKE_TOOLCHAIN_FILE=C:\vcpkg\scripts\buildsystems\vcpkg.cmake
-          -DVCPKG_TARGET_TRIPLET=x64-windows
+          -DFFMPEG_ROOT=${{ env.FFMPEG_ROOT }}
 
       - name: Build
         run: cmake --build build --config ${{ env.BUILD_TYPE }} --parallel
 
       - name: Package
+        shell: pwsh
         run: |
-          mkdir dist
-          copy build\${{ env.BUILD_TYPE }}\subtitle_generator.exe dist\
-          copy README.md dist\
-          copy LICENSE dist\ 2>NUL || echo No LICENSE file yet
+          New-Item -ItemType Directory -Force -Path dist | Out-Null
+          Copy-Item "build\${{ env.BUILD_TYPE }}\subtitle_generator.exe" dist\
+          Copy-Item "build\${{ env.BUILD_TYPE }}\*.dll" dist\ -ErrorAction SilentlyContinue
+          Copy-Item README.md dist\
+          if (Test-Path LICENSE) { Copy-Item LICENSE dist\ }
 
       - uses: actions/upload-artifact@v4
         with:
@@ -87,7 +92,7 @@ jobs:
           submodules: recursive
 
       - name: Install dependencies
-        run: brew install cmake ffmpeg
+        run: brew install cmake pkg-config ffmpeg
 
       - name: Configure
         run: cmake -B build -S . -DCMAKE_BUILD_TYPE=${{ env.BUILD_TYPE }}

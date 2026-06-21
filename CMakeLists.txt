@@ -9,30 +9,10 @@ if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
     set(CMAKE_BUILD_TYPE "Release" CACHE STRING "Build type" FORCE)
 endif()
 
-# ---------------------------------------------------------------------------
-# Options
-# ---------------------------------------------------------------------------
 option(USE_FFMPEG "Enable FFmpeg for multi-format audio decoding" ON)
 option(USE_GPU     "Allow GPU acceleration (CUDA on Windows/Linux, Metal on macOS)" ON)
 option(FORCE_CPU   "Force CPU-only build even if a GPU backend is detected" OFF)
 
-# ---------------------------------------------------------------------------
-# GPU backend auto-detection
-#
-# We don't hand-pick GGML source files (that approach silently bit-rots as
-# upstream whisper.cpp evolves). Instead we build whisper.cpp's own CMake
-# project as a subdirectory and let it decide which GGML backends to
-# compile in. We just toggle the right backend option for the host OS:
-#
-#   Windows / Linux + NVIDIA toolkit available -> GGML_CUDA
-#   macOS                                      -> GGML_METAL (default on
-#                                                  Apple platforms anyway)
-#   anything else / FORCE_CPU                  -> CPU backend only
-#
-# At runtime, whisper_init_from_file_with_params() with use_gpu=true will
-# automatically fall back to CPU if no compatible GPU is actually present,
-# so a CUDA-enabled binary still runs fine on a machine with no NVIDIA GPU.
-# ---------------------------------------------------------------------------
 set(SUBGEN_GPU_BACKEND "CPU")
 
 if(USE_GPU AND NOT FORCE_CPU)
@@ -40,9 +20,6 @@ if(USE_GPU AND NOT FORCE_CPU)
         set(GGML_METAL ON CACHE BOOL "" FORCE)
         set(SUBGEN_GPU_BACKEND "Metal")
     elseif(WIN32 OR (UNIX AND NOT APPLE))
-        # Only request CUDA if the CUDA toolkit is actually present at
-        # configure time, otherwise leave it off so CPU-only machines
-        # (CI runners, laptops with no NVIDIA GPU) still build cleanly.
         include(CheckLanguage)
         check_language(CUDA)
         if(CMAKE_CUDA_COMPILER)
@@ -61,9 +38,6 @@ endif()
 
 message(STATUS "=== SubtitleGenerator GPU backend: ${SUBGEN_GPU_BACKEND} ===")
 
-# ---------------------------------------------------------------------------
-# Platform / compiler definitions
-# ---------------------------------------------------------------------------
 if(WIN32)
     add_definitions(-D_USE_MATH_DEFINES)
     add_definitions(-D_WIN32_WINNT=0x0601)
@@ -75,9 +49,6 @@ if(MSVC)
     set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
 endif()
 
-# ---------------------------------------------------------------------------
-# whisper.cpp (vendored as a git submodule under third_party/whisper.cpp)
-# ---------------------------------------------------------------------------
 set(WHISPER_DIR "${CMAKE_CURRENT_SOURCE_DIR}/third_party/whisper.cpp")
 
 if(NOT EXISTS "${WHISPER_DIR}/CMakeLists.txt")
@@ -89,8 +60,6 @@ if(NOT EXISTS "${WHISPER_DIR}/CMakeLists.txt")
         "  git submodule update --init --recursive")
 endif()
 
-# whisper.cpp builds its own examples/tests by default; we only want the
-# library.
 set(WHISPER_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
 set(WHISPER_BUILD_TESTS    OFF CACHE BOOL "" FORCE)
 set(WHISPER_BUILD_SERVER   OFF CACHE BOOL "" FORCE)
@@ -98,9 +67,6 @@ set(BUILD_SHARED_LIBS      OFF CACHE BOOL "" FORCE)
 
 add_subdirectory(${WHISPER_DIR} whisper_build EXCLUDE_FROM_ALL)
 
-# ---------------------------------------------------------------------------
-# Application sources
-# ---------------------------------------------------------------------------
 set(APP_SOURCES
     src/main.cpp
     src/SubtitleGenerator.cpp
@@ -139,7 +105,7 @@ endif()
 
 if(MSVC)
     target_compile_options(subtitle_generator PRIVATE
-        /utf-8                 # source AND execution character set = UTF-8
+        /utf-8                
         /W3 /wd4996 /wd4267 /wd4244 /wd4099
         /D_CRT_SECURE_NO_WARNINGS
     )
@@ -158,9 +124,6 @@ if(APPLE)
     target_link_libraries(subtitle_generator PRIVATE ${FOUNDATION_LIB})
 endif()
 
-# ---------------------------------------------------------------------------
-# FFmpeg (optional, multi-format audio/video decoding)
-# ---------------------------------------------------------------------------
 if(USE_FFMPEG)
     if(NOT DEFINED FFMPEG_ROOT AND DEFINED ENV{FFMPEG_ROOT})
         set(FFMPEG_ROOT "$ENV{FFMPEG_ROOT}")
@@ -174,31 +137,47 @@ if(USE_FFMPEG)
     if(NOT FFMPEG_FOUND AND DEFINED FFMPEG_ROOT)
         find_path(FFMPEG_INCLUDE_DIR libavformat/avformat.h
             PATHS "${FFMPEG_ROOT}/include" NO_DEFAULT_PATH)
-        find_library(FFMPEG_avformat   NAMES avformat   PATHS "${FFMPEG_ROOT}/lib" NO_DEFAULT_PATH)
-        find_library(FFMPEG_avcodec    NAMES avcodec    PATHS "${FFMPEG_ROOT}/lib" NO_DEFAULT_PATH)
-        find_library(FFMPEG_avutil     NAMES avutil     PATHS "${FFMPEG_ROOT}/lib" NO_DEFAULT_PATH)
-        find_library(FFMPEG_swresample NAMES swresample PATHS "${FFMPEG_ROOT}/lib" NO_DEFAULT_PATH)
+        find_library(FFMPEG_avformat_LIB   NAMES avformat   PATHS "${FFMPEG_ROOT}/lib" NO_DEFAULT_PATH)
+        find_library(FFMPEG_avcodec_LIB    NAMES avcodec    PATHS "${FFMPEG_ROOT}/lib" NO_DEFAULT_PATH)
+        find_library(FFMPEG_avutil_LIB     NAMES avutil     PATHS "${FFMPEG_ROOT}/lib" NO_DEFAULT_PATH)
+        find_library(FFMPEG_swresample_LIB NAMES swresample PATHS "${FFMPEG_ROOT}/lib" NO_DEFAULT_PATH)
 
-        if(FFMPEG_INCLUDE_DIR AND FFMPEG_avformat AND FFMPEG_avcodec AND FFMPEG_avutil AND FFMPEG_swresample)
+        if(FFMPEG_INCLUDE_DIR AND FFMPEG_avformat_LIB AND FFMPEG_avcodec_LIB
+           AND FFMPEG_avutil_LIB AND FFMPEG_swresample_LIB)
             set(FFMPEG_FOUND TRUE)
             set(FFMPEG_INCLUDE_DIRS ${FFMPEG_INCLUDE_DIR})
-            set(FFMPEG_LIBRARIES ${FFMPEG_avformat} ${FFMPEG_avcodec} ${FFMPEG_avutil} ${FFMPEG_swresample})
+            set(FFMPEG_LIBRARIES
+                ${FFMPEG_avformat_LIB} ${FFMPEG_avcodec_LIB}
+                ${FFMPEG_avutil_LIB}   ${FFMPEG_swresample_LIB})
+            if(WIN32 AND EXISTS "${FFMPEG_ROOT}/bin")
+                file(GLOB FFMPEG_RUNTIME_DLLS "${FFMPEG_ROOT}/bin/*.dll")
+            endif()
         endif()
     endif()
 
-    # macOS Homebrew fallback (Apple Silicon and Intel prefixes)
     if(NOT FFMPEG_FOUND AND APPLE)
         foreach(_brew_prefix /opt/homebrew /usr/local)
-            if(EXISTS "${_brew_prefix}/include/libavformat/avformat.h")
-                set(FFMPEG_INCLUDE_DIRS "${_brew_prefix}/include")
-                set(FFMPEG_LIBRARIES
-                    "${_brew_prefix}/lib/libavformat.dylib"
-                    "${_brew_prefix}/lib/libavcodec.dylib"
-                    "${_brew_prefix}/lib/libavutil.dylib"
-                    "${_brew_prefix}/lib/libswresample.dylib")
+            find_path(FFMPEG_INCLUDE_DIR libavformat/avformat.h
+                PATHS "${_brew_prefix}/include" NO_DEFAULT_PATH)
+            find_library(FFMPEG_avformat_LIB   NAMES avformat   PATHS "${_brew_prefix}/lib" NO_DEFAULT_PATH)
+            find_library(FFMPEG_avcodec_LIB    NAMES avcodec    PATHS "${_brew_prefix}/lib" NO_DEFAULT_PATH)
+            find_library(FFMPEG_avutil_LIB     NAMES avutil     PATHS "${_brew_prefix}/lib" NO_DEFAULT_PATH)
+            find_library(FFMPEG_swresample_LIB NAMES swresample PATHS "${_brew_prefix}/lib" NO_DEFAULT_PATH)
+
+            if(FFMPEG_INCLUDE_DIR AND FFMPEG_avformat_LIB AND FFMPEG_avcodec_LIB
+               AND FFMPEG_avutil_LIB AND FFMPEG_swresample_LIB)
                 set(FFMPEG_FOUND TRUE)
+                set(FFMPEG_INCLUDE_DIRS ${FFMPEG_INCLUDE_DIR})
+                set(FFMPEG_LIBRARIES
+                    ${FFMPEG_avformat_LIB} ${FFMPEG_avcodec_LIB}
+                    ${FFMPEG_avutil_LIB}   ${FFMPEG_swresample_LIB})
                 break()
             endif()
+            unset(FFMPEG_INCLUDE_DIR CACHE)
+            unset(FFMPEG_avformat_LIB CACHE)
+            unset(FFMPEG_avcodec_LIB CACHE)
+            unset(FFMPEG_avutil_LIB CACHE)
+            unset(FFMPEG_swresample_LIB CACHE)
         endforeach()
     endif()
 
@@ -209,21 +188,27 @@ if(USE_FFMPEG)
         target_compile_definitions(subtitle_generator PRIVATE HAVE_FFMPEG=1)
     else()
         message(STATUS "FFmpeg NOT found -- only WAV input will be supported.")
-        message(STATUS "  Windows : install via vcpkg (vcpkg install ffmpeg) or set -DFFMPEG_ROOT=C:/ffmpeg")
-        message(STATUS "  macOS   : brew install ffmpeg")
+        message(STATUS "  Windows : download a prebuilt shared package from "
+                        "https://www.gyan.dev/ffmpeg/builds/ and pass "
+                        "-DFFMPEG_ROOT=C:/path/to/ffmpeg (see .github/workflows/build.yml)")
+        message(STATUS "  macOS   : brew install pkg-config ffmpeg")
         message(STATUS "  Linux   : sudo apt install libavformat-dev libavcodec-dev libswresample-dev libavutil-dev")
     endif()
 endif()
 
-# ---------------------------------------------------------------------------
-# Install rules (used by the release packaging step in CI)
-# ---------------------------------------------------------------------------
 install(TARGETS subtitle_generator RUNTIME DESTINATION .)
 if(WIN32)
-    # Pull in CUDA/whisper DLLs that get built alongside a shared whisper
-    # build, if BUILD_SHARED_LIBS was overridden by the toolchain.
     install(FILES $<TARGET_RUNTIME_DLLS:subtitle_generator>
             DESTINATION . OPTIONAL)
+
+    if(DEFINED FFMPEG_RUNTIME_DLLS)
+        install(FILES ${FFMPEG_RUNTIME_DLLS} DESTINATION .)
+        add_custom_command(TARGET subtitle_generator POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                ${FFMPEG_RUNTIME_DLLS}
+                $<TARGET_FILE_DIR:subtitle_generator>
+            COMMENT "Copying FFmpeg DLLs next to subtitle_generator.exe")
+    endif()
 endif()
 
 message(STATUS "=== SubtitleGenerator Build Summary ===")
