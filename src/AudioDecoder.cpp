@@ -97,18 +97,18 @@ void AudioDecoder::decodeWAV(const std::string& path,
 #endif
     if (!fp)
         throw std::runtime_error("Cannot open WAV file: " + path);
-
-    auto closeOnExit = [&]() { fclose(fp); };
+    struct FileGuard {
+        FILE* f;
+        ~FileGuard() { if (f) fclose(f); }
+    } file_guard{fp};
 
     char riff[4]; fread(riff, 1, 4, fp);
     if (memcmp(riff, "RIFF", 4) != 0) {
-        fclose(fp);
         throw std::runtime_error("Not a RIFF file: " + path);
     }
     fseek(fp, 4, SEEK_CUR); // skip file size
     char wave[4]; fread(wave, 1, 4, fp);
     if (memcmp(wave, "WAVE", 4) != 0) {
-        fclose(fp);
         throw std::runtime_error("Not a WAVE file: " + path);
     }
 
@@ -145,13 +145,14 @@ void AudioDecoder::decodeWAV(const std::string& path,
     }
 
     if (!found_fmt || !found_data) {
-        fclose(fp);
         throw std::runtime_error("Malformed WAV (missing fmt or data chunk): " + path);
     }
     if (audio_format != 1) {
-        fclose(fp);
         throw std::runtime_error("Only PCM WAV is supported (format=" +
                                  std::to_string(audio_format) + "): " + path);
+    }
+    if (num_channels == 0 || bits_per_sample == 0) {
+        throw std::runtime_error("Malformed WAV (zero channels or bit depth): " + path);
     }
 
     if (sample_rate != TARGET_SAMPLE_RATE) {
@@ -164,7 +165,6 @@ void AudioDecoder::decodeWAV(const std::string& path,
     size_t total_frames  = data_size / (bytes_per_sample * num_channels);
     std::vector<uint8_t> raw(data_size);
     size_t read_bytes = fread(raw.data(), 1, data_size, fp);
-    fclose(fp);
 
     if (read_bytes == 0)
         throw std::runtime_error("WAV data chunk is empty: " + path);
@@ -435,25 +435,36 @@ struct AudioDecoder::WAVDecoder : public AudioDecoder::Decoder {
         fp = fopen(path.c_str(), "rb");
 #endif
         if (!fp) throw std::runtime_error("Cannot open WAV: " + path);
+        try {
+            char riff[4]; fread(riff, 1, 4, fp); fseek(fp, 4, SEEK_CUR);
+            char wave[4]; fread(wave, 1, 4, fp);
 
-        char riff[4]; fread(riff, 1, 4, fp); fseek(fp, 4, SEEK_CUR);
-        char wave[4]; fread(wave, 1, 4, fp);
-
-        char cid[4]; uint32_t csz = 0;
-        while (fread(cid, 1, 4, fp) == 4 && fread(&csz, 4, 1, fp) == 1) {
-            if (memcmp(cid, "fmt ", 4) == 0) {
-                uint16_t fmt; fread(&fmt, 2, 1, fp);
-                fread(&channels, 2, 1, fp);
-                fread(&sample_rate, 4, 1, fp);
-                fseek(fp, 6, SEEK_CUR);
-                fread(&bps, 2, 1, fp);
-                if (csz > 16) fseek(fp, csz - 16, SEEK_CUR);
-            } else if (memcmp(cid, "data", 4) == 0) {
-                total_frames = csz / (bps / 8 * channels);
-                break;
-            } else {
-                fseek(fp, csz, SEEK_CUR);
+            char cid[4]; uint32_t csz = 0;
+            bool found_fmt = false;
+            while (fread(cid, 1, 4, fp) == 4 && fread(&csz, 4, 1, fp) == 1) {
+                if (memcmp(cid, "fmt ", 4) == 0) {
+                    uint16_t fmt; fread(&fmt, 2, 1, fp);
+                    fread(&channels, 2, 1, fp);
+                    fread(&sample_rate, 4, 1, fp);
+                    fseek(fp, 6, SEEK_CUR);
+                    fread(&bps, 2, 1, fp);
+                    if (csz > 16) fseek(fp, csz - 16, SEEK_CUR);
+                    found_fmt = true;
+                } else if (memcmp(cid, "data", 4) == 0) {
+                    if (!found_fmt || channels == 0 || bps == 0) {
+                        throw std::runtime_error(
+                            "Malformed WAV (data chunk before/without valid fmt): " + path);
+                    }
+                    total_frames = csz / (bps / 8 * channels);
+                    break;
+                } else {
+                    fseek(fp, csz, SEEK_CUR);
+                }
             }
+        } catch (...) {
+            fclose(fp);
+            fp = nullptr;
+            throw;
         }
     }
 
@@ -474,8 +485,19 @@ struct AudioDecoder::WAVDecoder : public AudioDecoder::Decoder {
             double sum = 0.0;
             for (int c = 0; c < channels; ++c) {
                 size_t idx = (f * channels + c) * bps_bytes;
-                if (bps == 16) { int16_t s; memcpy(&s, &raw[idx], 2); sum += s / 32768.0; }
-                else if (bps == 8) { sum += (raw[idx] - 128) / 128.0; }
+                if (bps == 16) {
+                    int16_t s; memcpy(&s, &raw[idx], 2);
+                    sum += s / 32768.0;
+                } else if (bps == 24) {
+                    int32_t s = (raw[idx+2] << 16) | (raw[idx+1] << 8) | raw[idx];
+                    if (s & 0x800000) s |= ~0xFFFFFF;
+                    sum += s / 8388608.0;
+                } else if (bps == 32) {
+                    float s; memcpy(&s, &raw[idx], 4);
+                    sum += s;
+                } else if (bps == 8) {
+                    sum += (raw[idx] - 128) / 128.0;
+                }
             }
             pcm[f] = static_cast<float>(sum / channels);
         }

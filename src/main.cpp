@@ -2,12 +2,16 @@
 #include "TimestampFormatter.hpp"
 #include "AudioDecoder.hpp"
 
+#include <algorithm>
 #include <chrono>
 #include <csignal>
+#include <cstdio>
 #include <filesystem>
+#include <fstream>
 #include <iomanip>
 #include <iostream>
 #include <string>
+#include <thread>
 
 #ifdef _WIN32
 #  define WIN32_LEAN_AND_MEAN
@@ -15,9 +19,21 @@
 #    define NOMINMAX
 #  endif
 #  include <windows.h>
+#  include <io.h>
+#  include <fcntl.h>
+#elif defined(__APPLE__)
+#  include <sys/sysctl.h>
+#  include <sys/types.h>
 #endif
 
 namespace fs = std::filesystem;
+
+#ifndef SUBGEN_VERSION
+#  define SUBGEN_VERSION "2.0.0"
+#endif
+#ifndef SUBGEN_GPU_BACKEND
+#  define SUBGEN_GPU_BACKEND "CPU"
+#endif
 
 static volatile sig_atomic_t g_interrupted = 0;
 static void sigint_handler(int) { g_interrupted = 1; }
@@ -26,10 +42,13 @@ static void enable_utf8_console() {
 #ifdef _WIN32
     SetConsoleOutputCP(CP_UTF8);
     SetConsoleCP(CP_UTF8);
+
     HANDLE h = GetStdHandle(STD_OUTPUT_HANDLE);
     DWORD mode = 0;
-    if (GetConsoleMode(h, &mode))
+    if (h != INVALID_HANDLE_VALUE && GetConsoleMode(h, &mode))
         SetConsoleMode(h, mode | ENABLE_VIRTUAL_TERMINAL_PROCESSING);
+    _setmode(_fileno(stdout), _O_TEXT);
+    _setmode(_fileno(stderr), _O_TEXT);
 #endif
 }
 
@@ -42,7 +61,7 @@ static void print_hardware_info() {
             0, KEY_READ, &hKey) == ERROR_SUCCESS) {
         DWORD size = sizeof(cpu_name);
         RegQueryValueExA(hKey, "ProcessorNameString", nullptr, nullptr,
-                         (LPBYTE)cpu_name, &size);
+                         reinterpret_cast<LPBYTE>(cpu_name), &size);
         RegCloseKey(hKey);
     }
     char* p = cpu_name;
@@ -61,59 +80,100 @@ static void print_hardware_info() {
     std::cout << "  Cores   : " << cores << "\n";
     std::cout << "  RAM     : " << std::fixed << std::setprecision(1)
               << ram_gb << " GB\n";
-#else
+
+#elif defined(__APPLE__)
+    char cpu_name[256] = "Unknown CPU";
+    size_t cpu_len = sizeof(cpu_name);
+    if (sysctlbyname("machdep.cpu.brand_string", cpu_name, &cpu_len, nullptr, 0) != 0
+        || cpu_name[0] == '\0') {
+        cpu_len = sizeof(cpu_name);
+        sysctlbyname("hw.model", cpu_name, &cpu_len, nullptr, 0);
+    }
+
+    int cores = 0;
+    size_t cores_len = sizeof(cores);
+    sysctlbyname("hw.ncpu", &cores, &cores_len, nullptr, 0);
+
+    int64_t ram_bytes = 0;
+    size_t ram_len = sizeof(ram_bytes);
+    sysctlbyname("hw.memsize", &ram_bytes, &ram_len, nullptr, 0);
+    double ram_gb = static_cast<double>(ram_bytes) / (1024.0 * 1024.0 * 1024.0);
+
+    std::cout << "  CPU     : " << cpu_name << "\n";
+    std::cout << "  Cores   : " << cores << "\n";
+    std::cout << "  RAM     : " << std::fixed << std::setprecision(1)
+              << ram_gb << " GB\n";
+
+#else // Linux and other POSIX
     {
         std::ifstream f("/proc/cpuinfo");
         std::string line;
+        bool found = false;
         while (std::getline(f, line)) {
             if (line.rfind("model name", 0) == 0) {
                 auto pos = line.find(':');
-                if (pos != std::string::npos)
+                if (pos != std::string::npos) {
                     std::cout << "  CPU     : " << line.substr(pos + 2) << "\n";
+                    found = true;
+                }
                 break;
             }
         }
+        if (!found) std::cout << "  CPU     : Unknown\n";
     }
     {
         std::ifstream f("/proc/meminfo");
         std::string line;
+        bool found = false;
         while (std::getline(f, line)) {
             if (line.rfind("MemTotal", 0) == 0) {
                 long kb = 0;
                 sscanf(line.c_str(), "MemTotal: %ld kB", &kb);
                 std::cout << "  RAM     : " << std::fixed << std::setprecision(1)
                           << kb / (1024.0 * 1024.0) << " GB\n";
+                found = true;
                 break;
             }
         }
+        if (!found) std::cout << "  RAM     : Unknown\n";
     }
+    std::cout << "  Cores   : " << std::thread::hardware_concurrency() << "\n";
 #endif
+
+    std::cout << "  Backend : " << SUBGEN_GPU_BACKEND
+#if defined(SUBGEN_HAVE_CUDA) || defined(SUBGEN_HAVE_METAL)
+              << " (GPU build -- falls back to CPU automatically if no "
+                 "compatible GPU is detected at runtime)"
+#else
+              << " (CPU-only build)"
+#endif
+              << "\n";
 }
 
 struct Options {
     std::string audio_path;
-    std::string model_path    = "models/ggml-base.en.bin";
+    std::string model_path     = "models/ggml-base.en.bin";
     std::string output_path;
-    std::string format        = "srt";
-    std::string language      = "auto";
-    double      chunk_secs    = 30.0;
-    int         n_threads     = 4;
-    bool        translate     = false;
-    bool        verbose       = false;
-    bool        stream        = false;
-    float       min_conf      = 0.0f;
-    bool        no_filler     = false;
-    bool        all_formats   = false;
+    std::string format         = "srt";
+    std::string language       = "auto";
+    double      chunk_secs     = 30.0;
+    int         n_threads      = 4;
+    bool        translate      = false;
+    bool        verbose        = false;
+    bool        stream         = false;
+    float       min_conf       = 0.0f;
+    bool        no_filler      = false;
+    bool        all_formats    = false;
 };
 
 static void printBanner() {
     std::cout <<
-"╔══════════════════════════════════════════════════════════════════╗\n"
-"║  SubtitleGenerator v2.0  ·  Powered by whisper.cpp              ║\n"
-"║  Author : SyntX  |  github.com/SyntX34                          ║\n"
-"║  Formats: WAV | MP3 | MP4 | MKV | FLAC | OGG | AAC             ║\n"
-"║  Output : SRT | VTT | ASS | JSON | TXT                          ║\n"
-"╚══════════════════════════════════════════════════════════════════╝\n\n";
+"+======================================================================+\n"
+"|  SubtitleGenerator v" SUBGEN_VERSION "  -  powered by whisper.cpp                |\n"
+"|  Author : SyntX  |  github.com/SyntX34                              |\n"
+"|  Formats: WAV | MP3 | MP4 | MKV | FLAC | OGG | AAC | ...            |\n"
+"|  Output : SRT | VTT | ASS | JSON | TXT                              |\n"
+"+======================================================================+\n\n";
 }
 
 static void printUsage(const char* prog) {
@@ -126,65 +186,104 @@ static void printUsage(const char* prog) {
 "MODEL\n"
 "  -m, --model <path>      Whisper model (default: models/ggml-base.en.bin)\n"
 "                          Models: ggml-tiny.en.bin  ggml-base.en.bin\n"
-"                                  ggml-small.en.bin ggml-medium.en.bin\n\n"
+"                                  ggml-small.en.bin  ggml-medium.en.bin\n\n"
 "OUTPUT\n"
 "  -o, --output <path>     Output file (default: <input>.<format>)\n"
 "  -f, --format <fmt>      srt | vtt | ass | json | txt  (default: srt)\n"
 "      --all-formats       Save all formats at once\n\n"
-"LANGUAGE\n"
-"  -l, --lang <code>       Language code: en, ja, zh, es, fr, de, auto\n"
-"      --translate         Translate to English\n\n"
+"LANGUAGE & TRANSLATION\n"
+"  -l, --lang <code>       Source language spoken in the audio (default: auto)\n"
+"                          Run with --list-languages to see every code.\n"
+"      --translate         Translate the transcription into English.\n"
+"                          Combine with -l to make it faster and more\n"
+"                          accurate, e.g. Spanish audio to English subs:\n"
+"                            -l es --translate\n"
+"                          (whisper.cpp can only translate INTO English;\n"
+"                          it cannot translate between two non-English\n"
+"                          languages.)\n"
+"      --list-languages    Print every supported language code and exit\n\n"
 "PROCESSING\n"
 "  -t, --threads <n>       Worker threads (default: 4)\n"
 "      --chunk <secs>      Audio chunk size in seconds (default: 30)\n"
 "      --min-conf <0-1>    Drop segments below this confidence\n"
-"      --no-filler         Remove filler words (um, uh, er ...)\n\n"
+"      --no-filler         Remove filler words (um, uh, er, ...)\n\n"
 "MISC\n"
-"  -s, --stream            Print subtitles live as generated\n"
+"  -s, --stream            Print subtitles live as they're generated\n"
 "  -v, --verbose           Verbose whisper output\n"
 "  -h, --help              Show this message\n\n"
 "EXAMPLES\n"
 "  " << prog << " movie.mp4\n"
 "  " << prog << " movie.mp4 -m models/ggml-medium.en.bin -f srt\n"
-"  " << prog << " lecture.mp3 -l auto --translate -o english.srt\n"
-"  " << prog << " film.mkv --all-formats --chunk 60\n";
+"  " << prog << " lecture.mp3 -l es --translate -o english.srt\n"
+"  " << prog << " film.mkv --all-formats --chunk 60\n\n"
+"Press Ctrl+C at any time to stop early; the subtitles generated so far\n"
+"are still saved.\n";
+}
+
+static void printLanguages() {
+    auto langs = SubtitleGenerator::supportedLanguages();
+    std::cout << "Supported language codes (" << langs.size() << "):\n\n";
+    size_t col = 0;
+    for (const auto& pair : langs) {
+        std::cout << "  " << std::left << std::setw(4) << pair.first
+                  << std::setw(20) << pair.second;
+        if (++col % 3 == 0) std::cout << "\n";
+    }
+    if (col % 3 != 0) std::cout << "\n";
+    std::cout << "\nUse 'auto' to let whisper detect the spoken language "
+                 "automatically.\n";
 }
 
 static bool parse(int argc, char* argv[], Options& opt) {
     if (argc < 2) { printUsage(argv[0]); return false; }
+
+    std::string first = argv[1];
+    if (first == "-h" || first == "--help") { printUsage(argv[0]); return false; }
+    if (first == "--list-languages") { printLanguages(); return false; }
+
     opt.audio_path = argv[1];
-    if (opt.audio_path == "-h" || opt.audio_path == "--help") {
-        printUsage(argv[0]); return false;
-    }
+
     for (int i = 2; i < argc; ++i) {
         std::string a = argv[i];
         auto next = [&]() -> std::string {
             if (i + 1 >= argc) {
-                std::cerr << "Missing value for " << a << "\n"; exit(1);
+                std::cerr << "Missing value for " << a << "\n";
+                std::exit(1);
             }
             return argv[++i];
         };
-        if      (a == "-h" || a == "--help")      { printUsage(argv[0]); return false; }
-        else if (a == "-m" || a == "--model")     { opt.model_path  = next(); }
-        else if (a == "-o" || a == "--output")    { opt.output_path = next(); }
-        else if (a == "-f" || a == "--format")    { opt.format      = next(); }
-        else if (a == "-l" || a == "--lang")      { opt.language    = next(); }
-        else if (a == "-t" || a == "--threads")   { opt.n_threads   = std::stoi(next()); }
-        else if (a == "--chunk")                  { opt.chunk_secs  = std::stod(next()); }
-        else if (a == "--min-conf")               { opt.min_conf    = std::stof(next()); }
-        else if (a == "--translate")              { opt.translate   = true; }
-        else if (a == "--no-filler")              { opt.no_filler   = true; }
-        else if (a == "--all-formats")            { opt.all_formats = true; }
-        else if (a == "-s" || a == "--stream")    { opt.stream      = true; }
-        else if (a == "-v" || a == "--verbose")   { opt.verbose     = true; }
+        if      (a == "-h" || a == "--help")     { printUsage(argv[0]); return false; }
+        else if (a == "--list-languages")        { printLanguages(); return false; }
+        else if (a == "-m" || a == "--model")    { opt.model_path  = next(); }
+        else if (a == "-o" || a == "--output")   { opt.output_path = next(); }
+        else if (a == "-f" || a == "--format")   { opt.format      = next(); }
+        else if (a == "-l" || a == "--lang")     { opt.language    = next(); }
+        else if (a == "-t" || a == "--threads")  { opt.n_threads   = std::stoi(next()); }
+        else if (a == "--chunk")                 { opt.chunk_secs  = std::stod(next()); }
+        else if (a == "--min-conf")              { opt.min_conf    = std::stof(next()); }
+        else if (a == "--translate")             { opt.translate   = true; }
+        else if (a == "--no-filler")             { opt.no_filler   = true; }
+        else if (a == "--all-formats")           { opt.all_formats = true; }
+        else if (a == "-s" || a == "--stream")   { opt.stream      = true; }
+        else if (a == "-v" || a == "--verbose")  { opt.verbose     = true; }
         else { std::cerr << "Unknown option: " << a << "\n"; return false; }
     }
 
-    static const char* valid[] = {"srt","vtt","ass","json","txt", nullptr};
-    bool ok = false;
-    for (int i = 0; valid[i]; ++i)
-        if (opt.format == valid[i]) { ok = true; break; }
-    if (!ok) { std::cerr << "Invalid format: " << opt.format << "\n"; return false; }
+    static const char* valid_formats[] = {"srt", "vtt", "ass", "json", "txt", nullptr};
+    bool format_ok = false;
+    for (int i = 0; valid_formats[i]; ++i)
+        if (opt.format == valid_formats[i]) { format_ok = true; break; }
+    if (!format_ok) {
+        std::cerr << "Invalid format: " << opt.format
+                  << " (expected one of: srt, vtt, ass, json, txt)\n";
+        return false;
+    }
+
+    if (opt.language != "auto" && !SubtitleGenerator::isValidLanguageCode(opt.language)) {
+        std::cerr << "Unknown language code: " << opt.language
+                  << "\nRun with --list-languages to see all supported codes.\n";
+        return false;
+    }
 
     if (opt.output_path.empty()) {
         fs::path p(opt.audio_path);
@@ -228,7 +327,8 @@ int main(int argc, char* argv[]) {
     }
     if (!fs::exists(opt.model_path)) {
         std::cerr << "[ERROR] Model not found: " << opt.model_path << "\n";
-        std::cerr << "  Download: https://huggingface.co/ggerganov/whisper.cpp\n";
+        std::cerr << "  Download a model from: "
+                     "https://huggingface.co/ggerganov/whisper.cpp/tree/main\n";
         return 1;
     }
 
@@ -262,17 +362,21 @@ int main(int argc, char* argv[]) {
             });
         }
 
-        std::cout << "Input   : " << opt.audio_path  << "\n"
-                  << "Model   : " << opt.model_path  << "\n"
-                  << "Language: " << opt.language     << "\n"
-                  << "Threads : " << opt.n_threads    << "\n"
-                  << "Chunk   : " << opt.chunk_secs   << "s\n"
-                  << "Format  : " << (opt.all_formats ? "all" : opt.format) << "\n\n";
+        std::string lang_desc = opt.language;
+        if (opt.translate) lang_desc += " -> en (translate)";
+
+        std::cout << "Input    : " << opt.audio_path  << "\n"
+                  << "Model    : " << opt.model_path  << "\n"
+                  << "Language : " << lang_desc        << "\n"
+                  << "Threads  : " << opt.n_threads    << "\n"
+                  << "Chunk    : " << opt.chunk_secs   << "s\n"
+                  << "Format   : " << (opt.all_formats ? "all" : opt.format) << "\n\n";
 
         gen.generate(opt.audio_path);
 
         if (g_interrupted) {
-            std::cout << "\n[INFO] Interrupted by user. Saving partial results...\n";
+            std::cout << "\n[INFO] Interrupted by user (Ctrl+C). "
+                         "Saving the subtitles generated so far...\n";
         }
 
         auto saveAs = [&](const std::string& fmt) {
@@ -286,23 +390,25 @@ int main(int argc, char* argv[]) {
         };
 
         if (opt.all_formats) {
-            for (auto& f : {"srt","vtt","json","ass","txt"}) saveAs(f);
+            for (const char* f : {"srt", "vtt", "json", "ass", "txt"}) saveAs(f);
         } else {
             saveAs(opt.format);
         }
 
         auto stats = gen.getStats();
         std::cout <<
-"\n+-- Summary --------------------------------------------------+\n"
-"| Segments   : " << stats.total_segments << "\n"
-"| Duration   : " << TimestampFormatter::formatDuration(stats.total_duration) << "\n"
-"| Processed  : " << std::fixed << std::setprecision(1) << stats.processing_time << "s\n"
-"| Speed      : " << std::setprecision(1) << stats.realtime_factor << "x real-time\n"
-"| Language   : " << stats.detected_language << "\n"
-"| Avg conf.  : " << std::setprecision(2) << stats.average_confidence << "\n"
-"| Avg seg.   : " << std::setprecision(2) << stats.average_segment_length << "s\n"
-"+-------------------------------------------------------------+\n"
-"\nDone!\n";
+"\n+-- Summary -----------------------------------------------------+\n"
+"| Segments    : " << stats.total_segments << "\n"
+"| Duration    : " << TimestampFormatter::formatDuration(stats.total_duration) << "\n"
+"| Processed   : " << std::fixed << std::setprecision(1) << stats.processing_time << "s\n"
+"| Speed       : " << std::setprecision(1) << stats.realtime_factor << "x real-time\n"
+"| Compute     : " << stats.compute_device << "\n"
+"| Language    : " << stats.detected_language << "\n"
+"| Avg conf.   : " << std::setprecision(2) << stats.average_confidence << "\n"
+"| Avg seg.    : " << std::setprecision(2) << stats.average_segment_length << "s\n"
+"| Interrupted : " << (stats.interrupted ? "yes" : "no") << "\n"
+"+------------------------------------------------------------------+\n"
+"\n" << (stats.interrupted ? "Done (partial -- interrupted by user)." : "Done!") << "\n";
 
     } catch (const std::exception& e) {
         std::cerr << "\n[ERROR] " << e.what() << "\n";

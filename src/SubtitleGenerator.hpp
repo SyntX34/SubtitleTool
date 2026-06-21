@@ -5,6 +5,8 @@
 #include <memory>
 #include <functional>
 #include <optional>
+#include <atomic>
+#include <csignal>
 
 struct whisper_context;
 
@@ -82,6 +84,9 @@ public:
         double realtime_factor        = 0.0;  // total_duration / processing_time
         std::string detected_language;
         float  average_confidence    = 0.0f;
+        bool   used_gpu               = false;
+        std::string compute_device;            // e.g. "CUDA", "Metal", "CPU"
+        bool   interrupted            = false;
     };
     Stats getStats() const { return m_stats; }
 
@@ -90,6 +95,35 @@ public:
 
     using ChunkFn = std::function<void(const std::vector<Subtitle>&)>;
     void setChunkCallback(ChunkFn fn) { m_chunk_fn = fn; }
+
+    /**
+     * Provide a pointer to an external interrupt flag (e.g. set by a
+     * SIGINT handler). When the flag becomes non-zero, generate() will
+     * stop after the current chunk and keep whatever subtitles were
+     * produced so far, so callers can still save partial output.
+     */
+    void setInterruptFlag(volatile sig_atomic_t* flag) { m_interrupt_flag = flag; }
+
+    /**
+     * Language helpers
+     * ----------------
+     * Whisper identifies languages with short codes ("en", "es", "ja",
+     * ...). These helpers translate between human-friendly names and the
+     * codes whisper.cpp expects, and validate user input before it
+     * reaches the model.
+     *
+     * Typical translation workflow (e.g. Spanish audio -> English subs):
+     *   cfg.language  = "es";     // tell whisper the SOURCE language
+     *                             // ("auto" also works, but giving the
+     *                             // real source language is faster and
+     *                             // more accurate when you already know it)
+     *   cfg.translate = true;     // ask whisper to TRANSLATE to English
+     *                             // (whisper.cpp can only translate INTO
+     *                             // English, not between arbitrary pairs)
+     */
+    static bool isValidLanguageCode(const std::string& code);
+    static std::string languageCodeToName(const std::string& code);
+    static std::vector<std::pair<std::string, std::string>> supportedLanguages();
 
 private:
     void initWhisper();
@@ -117,4 +151,5 @@ private:
     ProgressFn              m_progress_fn;
     ChunkFn                 m_chunk_fn;
     double                  m_audio_duration = 0.0;
+    volatile sig_atomic_t*  m_interrupt_flag = nullptr;
 };

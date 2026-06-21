@@ -19,6 +19,11 @@
 
 SubtitleGenerator::SubtitleGenerator(const SubtitleConfig& config)
     : m_config(config) {
+    if (m_config.language != "auto" && !isValidLanguageCode(m_config.language)) {
+        throw std::runtime_error(
+            "Unknown language code '" + m_config.language + "'. "
+            "Use 'auto' or one of the codes listed by --list-languages.");
+    }
     initWhisper();
 }
 
@@ -28,10 +33,28 @@ SubtitleGenerator::~SubtitleGenerator() {
 
 void SubtitleGenerator::initWhisper() {
     cleanupWhisper();
-    m_whisper_ctx = whisper_init_from_file(m_config.model_path.c_str());
+    struct whisper_context_params cparams = whisper_context_default_params();
+    cparams.use_gpu = true;
+
+    m_whisper_ctx = whisper_init_from_file_with_params(
+        m_config.model_path.c_str(), cparams);
+
     if (!m_whisper_ctx)
         throw std::runtime_error("Failed to load whisper model: " + m_config.model_path);
-    std::cout << "[Whisper] Model loaded: " << m_config.model_path << "\n";
+
+#if defined(SUBGEN_HAVE_CUDA)
+    m_stats.compute_device = "CUDA (NVIDIA GPU, falls back to CPU if unavailable)";
+    m_stats.used_gpu       = true;
+#elif defined(SUBGEN_HAVE_METAL)
+    m_stats.compute_device = "Metal (Apple GPU, falls back to CPU if unavailable)";
+    m_stats.used_gpu       = true;
+#else
+    m_stats.compute_device = "CPU";
+    m_stats.used_gpu       = false;
+#endif
+
+    std::cout << "[Whisper] Model loaded : " << m_config.model_path << "\n";
+    std::cout << "[Whisper] Build target : " << m_stats.compute_device << "\n";
 }
 
 void SubtitleGenerator::cleanupWhisper() {
@@ -45,7 +68,11 @@ void SubtitleGenerator::generate(const std::string& audio_path) {
     auto wall_start = std::chrono::high_resolution_clock::now();
 
     m_subtitles.clear();
+    bool        used_gpu       = m_stats.used_gpu;
+    std::string compute_device = m_stats.compute_device;
     m_stats = Stats{};
+    m_stats.used_gpu       = used_gpu;
+    m_stats.compute_device = compute_device;
 
     if (!AudioDecoder::isSupportedFormat(audio_path)) {
         throw std::runtime_error(
@@ -70,6 +97,13 @@ void SubtitleGenerator::generate(const std::string& audio_path) {
     int chunk_idx = 0;
 
     while (decoder->readChunk(chunk, chunk_secs + overlap_secs)) {
+        if (m_interrupt_flag && *m_interrupt_flag) {
+            m_stats.interrupted = true;
+            std::cout << "\n[SubtitleGenerator] Interrupt received, "
+                         "stopping after current chunk.\n";
+            break;
+        }
+
         double chunk_duration = static_cast<double>(chunk.size()) /
                                 AudioDecoder::TARGET_SAMPLE_RATE;
 
@@ -88,6 +122,13 @@ void SubtitleGenerator::generate(const std::string& audio_path) {
 
         chunk.clear();
         chunk.shrink_to_fit();
+
+        if (m_interrupt_flag && *m_interrupt_flag) {
+            m_stats.interrupted = true;
+            std::cout << "\n[SubtitleGenerator] Interrupt received, "
+                         "stopping after current chunk.\n";
+            break;
+        }
     }
 
     if (m_progress_fn)
@@ -355,9 +396,12 @@ std::string SubtitleGenerator::escapeJSON(const std::string& s) {
 
 std::string SubtitleGenerator::escapeASS(const std::string& s) {
     std::string out;
+    out.reserve(s.size());
     for (char c : s) {
-        if (c == '\n') out += "\\N";
-        else           out += c;
+        if      (c == '\n') out += "\\N";
+        else if (c == '{')  out += "\\{";
+        else if (c == '}')  out += "\\}";
+        else                out += c;
     }
     return out;
 }
@@ -472,4 +516,28 @@ void SubtitleGenerator::saveTXT(const std::string& path) const {
           << s.text << "\n";
     }
     std::cout << "[Save] TXT → " << path << "\n";
+}
+
+bool SubtitleGenerator::isValidLanguageCode(const std::string& code) {
+    if (code.empty()) return false;
+    return whisper_lang_id(code.c_str()) >= 0;
+}
+
+std::string SubtitleGenerator::languageCodeToName(const std::string& code) {
+    int id = whisper_lang_id(code.c_str());
+    if (id < 0) return "Unknown";
+    const char* name = whisper_lang_str_full(id);
+    return name ? name : code;
+}
+
+std::vector<std::pair<std::string, std::string>> SubtitleGenerator::supportedLanguages() {
+    std::vector<std::pair<std::string, std::string>> out;
+    int max_id = whisper_lang_max_id();
+    out.reserve(max_id + 1);
+    for (int id = 0; id <= max_id; ++id) {
+        const char* code = whisper_lang_str(id);
+        const char* name = whisper_lang_str_full(id);
+        if (code && name) out.emplace_back(code, name);
+    }
+    return out;
 }
