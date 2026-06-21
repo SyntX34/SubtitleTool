@@ -2,10 +2,12 @@
 
 A high-performance C++ subtitle generator built on [whisper.cpp](https://github.com/ggml-org/whisper.cpp), with automatic GPU acceleration and CPU fallback, multi-format audio/video input via FFmpeg, and built-in translation to English.
 
-[![Build](https://github.com/SyntX34/subtitle-generator/actions/workflows/build.yml/badge.svg)](https://github.com/SyntX34/SubtitleTool/actions/workflows/build.yml)
+[![Build](https://github.com/SyntX34/SubtitleTool/actions/workflows/build.yml/badge.svg)](https://github.com/SyntX34/SubtitleTool/actions/workflows/build.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Platforms](https://img.shields.io/badge/platform-Windows%20%7C%20Linux%20%7C%20macOS-informational)](#requirements)
-[![Releases](https://img.shields.io/github/v/release/SyntX34/subtitle-generator?include_prereleases)](https://github.com/SyntX34/SubtitleTool/releases)
+[![Releases](https://img.shields.io/github/v/release/SyntX34/SubtitleTool?include_prereleases)](https://github.com/SyntX34/SubtitleTool/releases)
+[![Stars](https://img.shields.io/github/stars/SyntX34/SubtitleTool?style=social)](https://github.com/SyntX34/SubtitleTool/stargazers)
+[![Downloads](https://img.shields.io/github/downloads/SyntX34/SubtitleTool/total)](https://github.com/SyntX34/SubtitleTool/releases)
 
 ---
 
@@ -194,15 +196,16 @@ cmake -B build -S . -DUSE_FFMPEG=OFF
 
 ## 📈 Project Activity
 
-<!--
-  Static placeholder — replace with a live badge once the repository has
-  history to report on, e.g.:
-  https://api.star-history.com/svg?repos=SyntX34/subtitle-generator&type=Date
--->
+![Star history](https://api.star-history.com/svg?repos=SyntX34/SubtitleTool&type=Date)
 
-![Repo activity placeholder](https://api.star-history.com/svg?repos=syntx34%2Fsubtitletool&type=Date)
+| Metric | Badge |
+|---|---|
+| ⭐ Stars | [![Stars](https://img.shields.io/github/stars/SyntX34/SubtitleTool?style=social)](https://github.com/SyntX34/SubtitleTool/stargazers) |
+| 🍴 Forks | [![Forks](https://img.shields.io/github/forks/SyntX34/SubtitleTool)](https://github.com/SyntX34/SubtitleTool/network/members) |
+| 📥 Total downloads | [![Downloads](https://img.shields.io/github/downloads/SyntX34/SubtitleTool/total)](https://github.com/SyntX34/SubtitleTool/releases) |
+| 📥 Latest release | [![Latest](https://img.shields.io/github/downloads/SyntX34/SubtitleTool/latest/total)](https://github.com/SyntX34/SubtitleTool/releases/latest) |
 
-Once the repository is live, this section will embed a real commit/star history chart from [star-history.com](https://star-history.com/).
+> 📊 Detailed download counts per release and platform are available on the [Releases page](https://github.com/SyntX34/SubtitleTool/releases).
 
 ---
 

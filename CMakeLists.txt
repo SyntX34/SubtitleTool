@@ -156,13 +156,23 @@ if(USE_FFMPEG)
     endif()
 
     if(NOT FFMPEG_FOUND AND APPLE)
-        foreach(_brew_prefix /opt/homebrew /usr/local)
+        find_program(BREW_EXECUTABLE brew)
+        if(BREW_EXECUTABLE)
+            execute_process(
+                COMMAND ${BREW_EXECUTABLE} --prefix ffmpeg
+                OUTPUT_VARIABLE FFMPEG_BREW_PREFIX
+                OUTPUT_STRIP_TRAILING_WHITESPACE
+                RESULT_VARIABLE FFMPEG_BREW_RESULT
+            )
+        endif()
+
+        if(FFMPEG_BREW_RESULT EQUAL 0 AND FFMPEG_BREW_PREFIX)
             find_path(FFMPEG_INCLUDE_DIR libavformat/avformat.h
-                PATHS "${_brew_prefix}/include" NO_DEFAULT_PATH)
-            find_library(FFMPEG_avformat_LIB   NAMES avformat   PATHS "${_brew_prefix}/lib" NO_DEFAULT_PATH)
-            find_library(FFMPEG_avcodec_LIB    NAMES avcodec    PATHS "${_brew_prefix}/lib" NO_DEFAULT_PATH)
-            find_library(FFMPEG_avutil_LIB     NAMES avutil     PATHS "${_brew_prefix}/lib" NO_DEFAULT_PATH)
-            find_library(FFMPEG_swresample_LIB NAMES swresample PATHS "${_brew_prefix}/lib" NO_DEFAULT_PATH)
+                PATHS "${FFMPEG_BREW_PREFIX}/include" NO_DEFAULT_PATH)
+            find_library(FFMPEG_avformat_LIB   NAMES avformat   PATHS "${FFMPEG_BREW_PREFIX}/lib" NO_DEFAULT_PATH)
+            find_library(FFMPEG_avcodec_LIB    NAMES avcodec    PATHS "${FFMPEG_BREW_PREFIX}/lib" NO_DEFAULT_PATH)
+            find_library(FFMPEG_avutil_LIB     NAMES avutil     PATHS "${FFMPEG_BREW_PREFIX}/lib" NO_DEFAULT_PATH)
+            find_library(FFMPEG_swresample_LIB NAMES swresample PATHS "${FFMPEG_BREW_PREFIX}/lib" NO_DEFAULT_PATH)
 
             if(FFMPEG_INCLUDE_DIR AND FFMPEG_avformat_LIB AND FFMPEG_avcodec_LIB
                AND FFMPEG_avutil_LIB AND FFMPEG_swresample_LIB)
@@ -171,14 +181,34 @@ if(USE_FFMPEG)
                 set(FFMPEG_LIBRARIES
                     ${FFMPEG_avformat_LIB} ${FFMPEG_avcodec_LIB}
                     ${FFMPEG_avutil_LIB}   ${FFMPEG_swresample_LIB})
-                break()
             endif()
-            unset(FFMPEG_INCLUDE_DIR CACHE)
-            unset(FFMPEG_avformat_LIB CACHE)
-            unset(FFMPEG_avcodec_LIB CACHE)
-            unset(FFMPEG_avutil_LIB CACHE)
-            unset(FFMPEG_swresample_LIB CACHE)
-        endforeach()
+        endif()
+
+        if(NOT FFMPEG_FOUND)
+            foreach(_brew_prefix /opt/homebrew /usr/local)
+                find_path(FFMPEG_INCLUDE_DIR libavformat/avformat.h
+                    PATHS "${_brew_prefix}/include" NO_DEFAULT_PATH)
+                find_library(FFMPEG_avformat_LIB   NAMES avformat   PATHS "${_brew_prefix}/lib" NO_DEFAULT_PATH)
+                find_library(FFMPEG_avcodec_LIB    NAMES avcodec    PATHS "${_brew_prefix}/lib" NO_DEFAULT_PATH)
+                find_library(FFMPEG_avutil_LIB     NAMES avutil     PATHS "${_brew_prefix}/lib" NO_DEFAULT_PATH)
+                find_library(FFMPEG_swresample_LIB NAMES swresample PATHS "${_brew_prefix}/lib" NO_DEFAULT_PATH)
+
+                if(FFMPEG_INCLUDE_DIR AND FFMPEG_avformat_LIB AND FFMPEG_avcodec_LIB
+                   AND FFMPEG_avutil_LIB AND FFMPEG_swresample_LIB)
+                    set(FFMPEG_FOUND TRUE)
+                    set(FFMPEG_INCLUDE_DIRS ${FFMPEG_INCLUDE_DIR})
+                    set(FFMPEG_LIBRARIES
+                        ${FFMPEG_avformat_LIB} ${FFMPEG_avcodec_LIB}
+                        ${FFMPEG_avutil_LIB}   ${FFMPEG_swresample_LIB})
+                    break()
+                endif()
+                unset(FFMPEG_INCLUDE_DIR CACHE)
+                unset(FFMPEG_avformat_LIB CACHE)
+                unset(FFMPEG_avcodec_LIB CACHE)
+                unset(FFMPEG_avutil_LIB CACHE)
+                unset(FFMPEG_swresample_LIB CACHE)
+            endforeach()
+        endif()
     endif()
 
     if(FFMPEG_FOUND)
