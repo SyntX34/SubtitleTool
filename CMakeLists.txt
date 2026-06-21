@@ -86,17 +86,19 @@ target_include_directories(subtitle_generator PRIVATE
     ${WHISPER_DIR}/ggml/include
 )
 
-target_link_libraries(subtitle_generator PRIVATE whisper)
-
-target_compile_definitions(subtitle_generator PRIVATE
-    SUBGEN_VERSION="2.0.0"
-    SUBGEN_GPU_BACKEND="${SUBGEN_GPU_BACKEND}"
+target_link_libraries(subtitle_generator PRIVATE
+    whisper
+    ggml
+    ggml-base
+    ggml-cpu
 )
 
-if(SUBGEN_GPU_BACKEND STREQUAL "CUDA")
-    target_compile_definitions(subtitle_generator PRIVATE SUBGEN_HAVE_CUDA=1)
-elseif(SUBGEN_GPU_BACKEND STREQUAL "Metal")
-    target_compile_definitions(subtitle_generator PRIVATE SUBGEN_HAVE_METAL=1)
+if(APPLE)
+    if(TARGET ggml-metal)
+        target_link_libraries(subtitle_generator PRIVATE ggml-metal)
+    endif()
+    find_library(FOUNDATION_LIB Foundation REQUIRED)
+    target_link_libraries(subtitle_generator PRIVATE ${FOUNDATION_LIB})
 endif()
 
 if(WIN32)
