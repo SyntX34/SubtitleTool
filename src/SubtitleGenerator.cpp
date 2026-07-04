@@ -33,6 +33,24 @@ SubtitleGenerator::~SubtitleGenerator() {
 
 void SubtitleGenerator::initWhisper() {
     cleanupWhisper();
+
+    // Disable Vulkan backend at the ggml level when CPU-only is requested.
+    // Otherwise ggml-vulkan enumerates Vulkan devices even with use_gpu=0,
+    // which can hang on some systems with problematic Vulkan drivers.
+    if (m_config.force_cpu) {
+#ifdef _WIN32
+        _putenv("GGML_VK_DISABLE=1");
+#else
+        setenv("GGML_VK_DISABLE", "1", 1);
+#endif
+    } else {
+#ifdef _WIN32
+        _putenv("GGML_VK_DISABLE=0");
+#else
+        setenv("GGML_VK_DISABLE", "0", 1);
+#endif
+    }
+
     struct whisper_context_params cparams = whisper_context_default_params();
 #if defined(SUBGEN_HAVE_CUDA) || defined(SUBGEN_HAVE_METAL) || defined(SUBGEN_HAVE_VULKAN)
     cparams.use_gpu = !m_config.force_cpu;
