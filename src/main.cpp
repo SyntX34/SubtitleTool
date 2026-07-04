@@ -321,7 +321,41 @@ static bool downloadFile(const std::string& url, const std::string& dest, const 
     auto exists_nonempty = [&]() { return fs::exists(dest) && fs::file_size(dest) > 0; };
 
 #ifdef _WIN32
-    // Method 1: Windows built-in URLDownloadToFile (zero dependencies, no progress bar)
+    // Method 1: PowerShell Start-BitsTransfer (built-in, great for large files, shows progress)
+    {
+        std::string cmd = "powershell -Command \"& {Start-BitsTransfer -Source '" + url + "' -Destination '" + dest + "' -Priority High -DisplayName '" + label + "' -Description 'Downloading...'}\"";
+        int ret = std::system(cmd.c_str());
+        if (ret == 0 && exists_nonempty()) { return true; }
+    }
+
+    // Method 2: PowerShell Invoke-WebRequest (built-in, shows progress bar)
+    {
+        std::string cmd = "powershell -Command \"& {Invoke-WebRequest -Uri '" + url + "' -OutFile '" + dest + "'}\"";
+        int ret = std::system(cmd.c_str());
+        if (ret == 0 && exists_nonempty()) { return true; }
+    }
+
+    // Method 3: aria2c (fast, multi-connection, shows progress)
+    {
+        std::string cmd = "aria2c -x 4 -s 4 -d \"" + parent.string()
+            + "\" -o \"" + fs::path(dest).filename().string()
+            + "\" \"" + url + "\"";
+        int ret = std::system(cmd.c_str());
+        if (ret == 0 && exists_nonempty()) { return true; }
+    }
+
+    // Method 4: curl (shows progress bar)
+    {
+        std::string part = dest + ".part";
+        std::string cmd = "curl -L --fail --progress-bar -o \"" + part + "\" \"" + url + "\"";
+        int ret = std::system(cmd.c_str());
+        if (ret == 0) {
+            std::rename(part.c_str(), dest.c_str());
+            if (exists_nonempty()) { return true; }
+        }
+    }
+
+    // Method 5: urlmon.dll (last resort, no progress but zero deps)
     {
         typedef long (__stdcall *URLDownloadFn)(void*, const char*, const char*, int, void*);
         HMODULE urlmon = LoadLibraryA("urlmon.dll");
@@ -335,33 +369,6 @@ static bool downloadFile(const std::string& url, const std::string& dest, const 
                 FreeLibrary(urlmon);
             }
         }
-    }
-
-    // Method 2: aria2c (fast, multi-connection, shows progress by default)
-    {
-        std::string cmd = "aria2c -x 4 -s 4 -d \"" + parent.string()
-            + "\" -o \"" + fs::path(dest).filename().string()
-            + "\" \"" + url + "\"";
-        int ret = std::system(cmd.c_str());
-        if (ret == 0 && exists_nonempty()) { return true; }
-    }
-
-    // Method 3: curl (shows progress bar)
-    {
-        std::string part = dest + ".part";
-        std::string cmd = "curl -L --fail --progress-bar -o \"" + part + "\" \"" + url + "\"";
-        int ret = std::system(cmd.c_str());
-        if (ret == 0) {
-            std::rename(part.c_str(), dest.c_str());
-            if (exists_nonempty()) { return true; }
-        }
-    }
-
-    // Method 4: PowerShell (fallback, no progress bar)
-    {
-        std::string cmd = "powershell -Command \"& {Invoke-WebRequest -Uri '" + url + "' -OutFile '" + dest + "'}\"";
-        int ret = std::system(cmd.c_str());
-        if (ret == 0 && exists_nonempty()) { return true; }
     }
 #else
     // Method 1: aria2c (fast, multi-connection, shows progress by default)
