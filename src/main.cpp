@@ -12,6 +12,7 @@
 #include <fstream>
 #include <iomanip>
 #include <iostream>
+#include <sstream>
 #include <string>
 #include <thread>
 #include <vector>
@@ -32,7 +33,7 @@
 namespace fs = std::filesystem;
 
 #ifndef SUBGEN_VERSION
-#  define SUBGEN_VERSION "1.1.0"
+#  define SUBGEN_VERSION "1.1.1"
 #endif
 #ifndef SUBGEN_GPU_BACKEND
 #  define SUBGEN_GPU_BACKEND "CPU"
@@ -652,6 +653,39 @@ static std::string interactiveModelPicker(const std::vector<SelectableModel>& al
     return selected->path;
 }
 
+/// Download one or more models by name, then exit.
+static bool downloadModels(const std::vector<std::string>& names) {
+    // Collect all available models for lookup
+    auto all = collectModels();
+
+    bool all_ok = true;
+    for (const auto& name : names) {
+        // Find the model in the list
+        const SelectableModel* model = nullptr;
+        for (const auto& m : all) {
+            if (m.name == name) { model = &m; break; }
+        }
+        if (!model) {
+            std::cerr << "[ERROR] Unknown model: " << name << "\n";
+            std::cerr << "  Run with --list-models to see all available models.\n";
+            all_ok = false;
+            continue;
+        }
+
+        if (model->downloaded) {
+            std::cout << "[INFO] Model '" << name << "' is already downloaded: " << model->path << "\n";
+            continue;
+        }
+
+        std::string path = downloadAndGetPath(*model);
+        if (path.empty()) {
+            all_ok = false;
+        }
+    }
+
+    return all_ok;
+}
+
 /// Print the downloadable models list (for --list-models).
 static void printModels(const std::string& defaultModel = "base.en") {
     auto all = collectModels();
@@ -668,6 +702,19 @@ static bool parse(int argc, char* argv[], Options& opt) {
     if (first == "-h" || first == "--help") { printUsage(argv[0]); return false; }
     if (first == "--list-languages") { printLanguages(); return false; }
     if (first == "--list-models")    { printModels(); return false; }
+    if (first == "--download-model") {
+        std::vector<std::string> models;
+        for (int j = 2; j < argc && argv[j][0] != '-'; ++j)
+            models.push_back(argv[j]);
+        if (models.empty()) {
+            std::cerr << "Usage: --download-model <name1> [name2 ...]\n";
+            std::cerr << "  Example: --download-model base.en small medium\n";
+            std::cerr << "  Run --list-models to see all available models.\n";
+            return false;
+        }
+        if (!downloadModels(models)) return false;
+        return false;
+    }
 
     opt.audio_path = argv[1];
 
@@ -683,6 +730,20 @@ static bool parse(int argc, char* argv[], Options& opt) {
         if      (a == "-h" || a == "--help")     { printUsage(argv[0]); return false; }
         else if (a == "--list-languages")        { printLanguages(); return false; }
         else if (a == "--list-models")           { printModels(); return false; }
+        else if (a == "--download-model")        {
+            std::vector<std::string> models;
+            while (i + 1 < argc && argv[i + 1][0] != '-') {
+                models.push_back(argv[++i]);
+            }
+            if (models.empty()) {
+                std::cerr << "Usage: --download-model <name1> [name2 ...]\n";
+                std::cerr << "  Example: --download-model base.en small medium\n";
+                std::cerr << "  Run --list-models to see all available models.\n";
+                return false;
+            }
+            if (!downloadModels(models)) return false;
+            return false;  // exit after downloading
+        }
         else if (a == "-m" || a == "--model")    { opt.model_path  = next(); }
         else if (a == "-o" || a == "--output")   { opt.output_path = next(); }
         else if (a == "-f" || a == "--format")   { opt.format      = next(); }
@@ -819,19 +880,60 @@ int main(int argc, char* argv[]) {
         for (const auto& m : all) if (m.downloaded) ++localCount;
 
         if (localCount == 0) {
-            // No models at all — offer to download the default
+            // No models at all — offer to download
             std::cout << "[INFO] No model files found in the 'models/' directory.\n\n";
             printModelMenu(all);
             if (!all.empty()) {
-                // auto-select the default (base.en)
-                const SelectableModel* def = nullptr;
-                for (const auto& m : all)
-                    if (m.name == "base.en") { def = &m; break; }
-                if (!def) def = &all[0];
+                std::cout << "\n  Enter model name(s) to download (space-separated), or just press Enter";
+                std::cout << " to download the default (base.en):\n";
+                std::cout << "  > ";
+                std::cout.flush();
 
-                std::string path = downloadAndGetPath(*def);
-                if (path.empty()) return 1;
-                opt.model_path = path;
+                std::string input;
+                std::getline(std::cin, input);
+
+                std::vector<std::string> toDownload;
+                if (input.empty()) {
+                    toDownload.push_back("base.en");
+                } else {
+                    std::istringstream iss(input);
+                    std::string name;
+                    while (iss >> name) toDownload.push_back(name);
+                }
+
+                // Validate names first
+                bool allValid = true;
+                for (const auto& name : toDownload) {
+                    bool found = false;
+                    for (const auto& m : all) if (m.name == name) { found = true; break; }
+                    if (!found) {
+                        std::cerr << "[ERROR] Unknown model: " << name << "\n";
+                        allValid = false;
+                    }
+                }
+                if (!allValid) return 1;
+
+                // Download each model
+                bool anyFailed = false;
+                for (const auto& name : toDownload) {
+                    const SelectableModel* def = nullptr;
+                    for (const auto& m : all)
+                        if (m.name == name) { def = &m; break; }
+                    if (!def) continue;
+
+                    std::string path = downloadAndGetPath(*def);
+                    if (path.empty()) {
+                        anyFailed = true;
+                    } else {
+                        // Use the LAST successfully downloaded model for transcription
+                        opt.model_path = path;
+                    }
+                }
+
+                if (anyFailed) {
+                    std::cerr << "[ERROR] Some models failed to download.\n";
+                    return 1;
+                }
             } else {
                 return 1;
             }
