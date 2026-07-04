@@ -34,6 +34,21 @@ jobs:
           Move-Item $dir.FullName C:\ffmpeg
           echo "FFMPEG_ROOT=C:\ffmpeg" >> $env:GITHUB_ENV
 
+      - name: Install Vulkan SDK
+        shell: pwsh
+        run: |
+          # Chocolatey is pre-installed on GitHub Actions Windows runners
+          choco install vulkan-sdk -y --no-progress
+          # Chocolatey sets up VULKAN_SDK env var automatically for subsequent steps
+          # But we also set it explicitly to ensure cmake finds it
+          $sdkDir = &"C:\ProgramData\chocolatey\bin\refreshenv.cmd" 2>$null; $null
+          # The Vulkan SDK installs into C:\VulkanSDK\<version>
+          $sdkRoot = Get-ChildItem "C:\VulkanSDK" -Directory | Select-Object -ExpandProperty FullName -First 1
+          if ($sdkRoot) {
+            echo "VULKAN_SDK=$sdkRoot" >> $env:GITHUB_ENV
+            echo "VK_SDK_PATH=$sdkRoot" >> $env:GITHUB_ENV
+          }
+
       - name: Configure
         run: >
           cmake -B build -S .
@@ -70,6 +85,16 @@ jobs:
           sudo apt-get install -y \
             build-essential cmake \
             libavformat-dev libavcodec-dev libavutil-dev libswresample-dev
+
+      - name: Install Vulkan SDK
+        run: |
+          # Ensure the keyrings directory exists (needed on some Ubuntu runner images)
+          sudo mkdir -p /etc/apt/keyrings
+          wget -qO- https://packages.lunarg.com/lunarg-signing-key-pub.asc | sudo tee /etc/apt/keyrings/lunarg.asc > /dev/null
+          sudo wget -qO /etc/apt/sources.list.d/lunarg-vulkan-$(lsb_release -cs).list \
+            https://packages.lunarg.com/vulkan/lunarg-vulkan-$(lsb_release -cs).list
+          sudo apt-get update
+          sudo apt-get install -y vulkan-sdk
 
       - name: Configure
         run: cmake -B build -S . -DCMAKE_BUILD_TYPE=${{ env.BUILD_TYPE }}

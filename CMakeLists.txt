@@ -16,10 +16,15 @@ option(FORCE_CPU   "Force CPU-only build even if a GPU backend is detected" OFF)
 set(SUBGEN_GPU_BACKEND "CPU")
 
 if(USE_GPU AND NOT FORCE_CPU)
+    # --- Metal (macOS) ---
     if(APPLE)
         set(GGML_METAL ON CACHE BOOL "" FORCE)
         set(SUBGEN_GPU_BACKEND "Metal")
-    elseif(WIN32 OR (UNIX AND NOT APPLE))
+        message(STATUS "Metal enabled -- building with Apple GPU support")
+    endif()
+
+    # --- CUDA (NVIDIA GPUs on Windows/Linux) ---
+    if(WIN32 OR (UNIX AND NOT APPLE))
         find_package(CUDAToolkit QUIET)
         if(CUDAToolkit_FOUND)
             set(GGML_CUDA ON CACHE BOOL "" FORCE)
@@ -33,17 +38,41 @@ if(USE_GPU AND NOT FORCE_CPU)
                 set(GGML_CUDA ON CACHE BOOL "" FORCE)
                 set(SUBGEN_GPU_BACKEND "CUDA")
                 message(STATUS "CUDA toolkit found (fallback) -- building with CUDA support")
-            else()
-                message(STATUS "No CUDA toolkit found -- building CPU-only. "
-                                "(Install CUDA toolkit from nvidia.com and rebuild to enable GPU acceleration.)")
             endif()
         endif()
+    endif()
+
+    # --- Vulkan (cross-platform GPU: NVIDIA / AMD / Intel) ---
+    # Vulkan is the most universal GPU backend — works on all modern GPUs
+    # across Windows and Linux. It picks the best available GPU at runtime.
+    if(WIN32 OR (UNIX AND NOT APPLE))
+        find_package(Vulkan QUIET COMPONENTS glslc)
+        if(Vulkan_FOUND AND Vulkan_glslc_FOUND)
+            set(GGML_VULKAN ON CACHE BOOL "" FORCE)
+            if(SUBGEN_GPU_BACKEND STREQUAL "CPU")
+                set(SUBGEN_GPU_BACKEND "Vulkan")
+            else()
+                # already has CUDA, so we describe the full picture
+                set(SUBGEN_GPU_BACKEND "${SUBGEN_GPU_BACKEND}+Vulkan")
+            endif()
+            message(STATUS "Vulkan SDK found -- building with Vulkan GPU support")
+        else()
+            message(STATUS "No Vulkan SDK found. "
+                            "Install Vulkan SDK from https://vulkan.lunarg.com/ "
+                            "to enable cross-platform GPU acceleration.")
+        endif()
+    endif()
+
+    if(SUBGEN_GPU_BACKEND STREQUAL "CPU")
+        message(STATUS "No GPU backend available -- building CPU-only. "
+                        "(Install CUDA toolkit for NVIDIA GPUs or "
+                        "Vulkan SDK for any GPU to enable acceleration.)")
     endif()
 else()
     message(STATUS "GPU acceleration disabled (USE_GPU=OFF or FORCE_CPU=ON).")
 endif()
 
-message(STATUS "=== SubtitleGenerator GPU backend: ${SUBGEN_GPU_BACKEND} ===")
+message(STATUS "=== SubtitleGenerator GPU backend(s): ${SUBGEN_GPU_BACKEND} ===")
 
 if(WIN32)
     add_definitions(-D_USE_MATH_DEFINES)
@@ -108,8 +137,30 @@ if(APPLE)
     target_link_libraries(subtitle_generator PRIVATE ${FOUNDATION_LIB})
 endif()
 
+if(WIN32 OR (UNIX AND NOT APPLE))
+    if(TARGET ggml-vulkan)
+        target_link_libraries(subtitle_generator PRIVATE ggml-vulkan)
+        message(STATUS "ggml-vulkan target found -- Vulkan GPU backend linked")
+    endif()
+endif()
+
 if(WIN32)
     target_link_libraries(subtitle_generator PRIVATE winmm ws2_32)
+endif()
+
+# Pass GPU backend info as compile definitions to the source code.
+# These drive GPU detection at runtime via SUBGEN_HAVE_CUDA / SUBGEN_HAVE_METAL / SUBGEN_HAVE_VULKAN.
+target_compile_definitions(subtitle_generator PRIVATE
+    SUBGEN_GPU_BACKEND="${SUBGEN_GPU_BACKEND}"
+)
+if(GGML_CUDA)
+    target_compile_definitions(subtitle_generator PRIVATE SUBGEN_HAVE_CUDA=1)
+endif()
+if(GGML_METAL)
+    target_compile_definitions(subtitle_generator PRIVATE SUBGEN_HAVE_METAL=1)
+endif()
+if(GGML_VULKAN)
+    target_compile_definitions(subtitle_generator PRIVATE SUBGEN_HAVE_VULKAN=1)
 endif()
 
 if(MSVC)

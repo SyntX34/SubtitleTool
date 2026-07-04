@@ -34,7 +34,7 @@ SubtitleGenerator::~SubtitleGenerator() {
 void SubtitleGenerator::initWhisper() {
     cleanupWhisper();
     struct whisper_context_params cparams = whisper_context_default_params();
-#if defined(SUBGEN_HAVE_CUDA) || defined(SUBGEN_HAVE_METAL)
+#if defined(SUBGEN_HAVE_CUDA) || defined(SUBGEN_HAVE_METAL) || defined(SUBGEN_HAVE_VULKAN)
     cparams.use_gpu = true;
 #else
     cparams.use_gpu = false;
@@ -51,6 +51,9 @@ void SubtitleGenerator::initWhisper() {
     m_stats.used_gpu       = true;
 #elif defined(SUBGEN_HAVE_METAL)
     m_stats.compute_device = "Metal (Apple GPU, falls back to CPU if unavailable)";
+    m_stats.used_gpu       = true;
+#elif defined(SUBGEN_HAVE_VULKAN)
+    m_stats.compute_device = "Vulkan (GPU, falls back to CPU if unavailable)";
     m_stats.used_gpu       = true;
 #else
     m_stats.compute_device = "CPU";

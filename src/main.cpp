@@ -141,7 +141,7 @@ static void print_hardware_info() {
 #endif
 
     std::cout << "  Backend : " << SUBGEN_GPU_BACKEND
-#if defined(SUBGEN_HAVE_CUDA) || defined(SUBGEN_HAVE_METAL)
+#if defined(SUBGEN_HAVE_CUDA) || defined(SUBGEN_HAVE_METAL) || defined(SUBGEN_HAVE_VULKAN)
               << " (GPU build -- falls back to CPU automatically if no "
                  "compatible GPU is detected at runtime)"
 #else
