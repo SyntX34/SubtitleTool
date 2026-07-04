@@ -50,6 +50,8 @@ struct SubtitleConfig {
     float  min_confidence          = 0.0f;  // drop segments below this
     bool   remove_filler_words     = false; // drop "um", "uh", etc.
 
+    bool   force_cpu               = false;   // ignore GPU even if compiled with GPU support
+
     int    n_threads               = 4;
 };
 

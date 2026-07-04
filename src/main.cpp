@@ -164,6 +164,7 @@ struct Options {
     float       min_conf       = 0.0f;
     bool        no_filler      = false;
     bool        all_formats    = false;
+    bool        force_cpu      = false;
 };
 
 static void printBanner() {
@@ -210,6 +211,7 @@ static void printUsage(const char* prog) {
 "MISC\n"
 "  -s, --stream            Print subtitles live as they're generated\n"
 "  -v, --verbose           Verbose whisper output\n"
+"      --cpu, --force-cpu  Use CPU only, even if compiled with GPU support\n"
 "  -h, --help              Show this message\n\n"
 "EXAMPLES\n"
 "  " << prog << " movie.mp4\n"
@@ -266,6 +268,7 @@ static bool parse(int argc, char* argv[], Options& opt) {
         else if (a == "--all-formats")           { opt.all_formats = true; }
         else if (a == "-s" || a == "--stream")   { opt.stream      = true; }
         else if (a == "-v" || a == "--verbose")  { opt.verbose     = true; }
+        else if (a == "--cpu" || a == "--force-cpu") { opt.force_cpu = true; }
         else { std::cerr << "Unknown option: " << a << "\n"; return false; }
     }
 
@@ -343,6 +346,7 @@ int main(int argc, char* argv[]) {
         cfg.min_confidence         = opt.min_conf;
         cfg.remove_filler_words    = opt.no_filler;
         cfg.print_special          = opt.verbose;
+        cfg.force_cpu              = opt.force_cpu;
         cfg.merge_short_segments   = true;
         cfg.max_segment_duration   = 5.0;
 

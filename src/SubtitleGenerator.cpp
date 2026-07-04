@@ -35,7 +35,7 @@ void SubtitleGenerator::initWhisper() {
     cleanupWhisper();
     struct whisper_context_params cparams = whisper_context_default_params();
 #if defined(SUBGEN_HAVE_CUDA) || defined(SUBGEN_HAVE_METAL) || defined(SUBGEN_HAVE_VULKAN)
-    cparams.use_gpu = true;
+    cparams.use_gpu = !m_config.force_cpu;
 #else
     cparams.use_gpu = false;
 #endif
@@ -47,14 +47,29 @@ void SubtitleGenerator::initWhisper() {
         throw std::runtime_error("Failed to load whisper model: " + m_config.model_path);
 
 #if defined(SUBGEN_HAVE_CUDA)
-    m_stats.compute_device = "CUDA (NVIDIA GPU, falls back to CPU if unavailable)";
-    m_stats.used_gpu       = true;
+    if (m_config.force_cpu) {
+        m_stats.compute_device = "CUDA (GPU available, forced to CPU by --cpu)";
+        m_stats.used_gpu       = false;
+    } else {
+        m_stats.compute_device = "CUDA (NVIDIA GPU, falls back to CPU if unavailable)";
+        m_stats.used_gpu       = true;
+    }
 #elif defined(SUBGEN_HAVE_METAL)
-    m_stats.compute_device = "Metal (Apple GPU, falls back to CPU if unavailable)";
-    m_stats.used_gpu       = true;
+    if (m_config.force_cpu) {
+        m_stats.compute_device = "Metal (GPU available, forced to CPU by --cpu)";
+        m_stats.used_gpu       = false;
+    } else {
+        m_stats.compute_device = "Metal (Apple GPU, falls back to CPU if unavailable)";
+        m_stats.used_gpu       = true;
+    }
 #elif defined(SUBGEN_HAVE_VULKAN)
-    m_stats.compute_device = "Vulkan (GPU, falls back to CPU if unavailable)";
-    m_stats.used_gpu       = true;
+    if (m_config.force_cpu) {
+        m_stats.compute_device = "Vulkan (GPU available, forced to CPU by --cpu)";
+        m_stats.used_gpu       = false;
+    } else {
+        m_stats.compute_device = "Vulkan (GPU, falls back to CPU if unavailable)";
+        m_stats.used_gpu       = true;
+    }
 #else
     m_stats.compute_device = "CPU";
     m_stats.used_gpu       = false;
