@@ -108,6 +108,7 @@ set(APP_SOURCES
     src/SubtitleGenerator.cpp
     src/TimestampFormatter.cpp
     src/AudioDecoder.cpp
+    src/FFmpegHelper.cpp
 )
 
 if(WIN32)
@@ -277,6 +278,21 @@ if(USE_FFMPEG)
         target_link_directories(subtitle_generator PRIVATE ${FFMPEG_LIBRARY_DIRS})
         target_link_libraries(subtitle_generator PRIVATE ${FFMPEG_LIBRARIES})
         target_compile_definitions(subtitle_generator PRIVATE HAVE_FFMPEG=1)
+
+        # On MSVC: use /DELAYLOAD so FFmpeg DLLs are loaded lazily.
+        # This means the binary can start even without FFmpeg DLLs,
+        # and the FFmpegHelper can add search paths at runtime.
+        if(MSVC)
+            target_link_libraries(subtitle_generator PRIVATE delayimp)
+            foreach(_dll
+                avformat-61 avformat-60 avformat-59 avformat-58 avformat
+                avcodec-61  avcodec-60  avcodec-59  avcodec-58  avcodec
+                avutil-59   avutil-58   avutil-57   avutil-56   avutil
+                swresample-5 swresample-4 swresample-3 swresample)
+                target_link_options(subtitle_generator PRIVATE "/DELAYLOAD:${_dll}.dll")
+            endforeach()
+            message(STATUS "  + /DELAYLOAD enabled for all FFmpeg DLLs (lazy loading)")
+        endif()
     else()
         message(STATUS "FFmpeg NOT found -- only WAV input will be supported.")
         message(STATUS "  Windows : download a prebuilt shared package from "

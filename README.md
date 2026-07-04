@@ -1,54 +1,62 @@
 # 🎬 SubtitleGenerator
 
-A high-performance C++ subtitle generator built on [whisper.cpp](https://github.com/ggml-org/whisper.cpp), with automatic GPU acceleration and CPU fallback, multi-format audio/video input via FFmpeg, and built-in translation to English.
+A high-performance C++ subtitle generator built on [whisper.cpp](https://github.com/ggml-org/whisper.cpp), with automatic GPU acceleration, CPU fallback, multi-format input via FFmpeg, and built-in translation to English.
 
 [![Build](https://github.com/SyntX34/SubtitleTool/actions/workflows/build.yml/badge.svg)](https://github.com/SyntX34/SubtitleTool/actions/workflows/build.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Platforms](https://img.shields.io/badge/platform-Windows%20%7C%20Linux%20%7C%20macOS-informational)](#requirements)
 [![Releases](https://img.shields.io/github/v/release/SyntX34/SubtitleTool?include_prereleases)](https://github.com/SyntX34/SubtitleTool/releases)
 [![Stars](https://img.shields.io/github/stars/SyntX34/SubtitleTool?style=social)](https://github.com/SyntX34/SubtitleTool/stargazers)
-[![Downloads](https://img.shields.io/github/downloads/SyntX34/SubtitleTool/total)](https://github.com/SyntX34/SubtitleTool/releases)
 
 ---
 
 ## ✨ Features
 
-- 🚀 **GPU-accelerated, CPU-safe** — uses CUDA on Windows/Linux or Metal on macOS automatically when available, and falls back to a SIMD-optimized CPU path with no extra setup if it isn't.
-- 🎯 **Accurate timing** — segment-level timestamps with confidence scores per segment.
-- 🌍 **96-language transcription + translation** — transcribe in the spoken language, or translate directly into English (see [Language & Translation](#-language--translation)).
-- 📝 **Multiple output formats** — SRT, WebVTT, ASS (Advanced SubStation Alpha), JSON, and plain TXT.
-- 🎞️ **Multi-format input via FFmpeg** — WAV natively, plus MP3/MP4/MKV/FLAC/OGG/AAC/MOV/WEBM/and more when built with FFmpeg.
+- 🚀 **GPU-accelerated with CPU fallback** — uses Vulkan/CUDA on Windows/Linux or Metal on macOS automatically when available, with CPU fallback if no compatible GPU is found.
+- 🎯 **Live subtitle preview** — see transcribed text in real-time alongside the progress bar as audio is processed.
+- 🌍 **100-language transcription + translation** — transcribe in the spoken language, or translate **into** English.
+- 📝 **Multiple output formats** — SRT, WebVTT, ASS, JSON, and plain TXT.
+- 🎞️ **Multi-format input** — WAV (built-in), plus MP3/MP4/MKV/FLAC/OGG/AAC/MOV/AVI/WEBM and more via FFmpeg.
 - ⚙️ **Configurable** — adjustable chunking, segment merging/splitting, confidence filtering, filler-word removal.
-- 🖥️ **Live hardware + backend report** — prints CPU, core count, RAM, and the active compute backend (CUDA / Metal / CPU) on every run.
-- ⏹️ **Graceful Ctrl+C handling** — stop at any time; subtitles produced so far are still saved.
+- ⏹️ **Graceful Ctrl+C** — stop at any time; subtitles produced so far are still saved.
 - 📊 **Performance stats** — real-time factor, average confidence, average segment length.
 
 ---
 
-## 📦 Requirements
+## 📦 Download & Run
 
-| | Windows | Linux | macOS |
-|---|---|---|---|
-| Compiler | MSVC 2019+ | GCC 7+ / Clang 6+ | Clang (Xcode CLT) |
-| CMake | 3.15+ | 3.15+ | 3.15+ |
-| GPU backend | CUDA Toolkit (optional) | CUDA Toolkit (optional) | Metal (built into the OS) |
-| FFmpeg (optional, for non-WAV input) | via [vcpkg](https://github.com/microsoft/vcpkg) | `apt install libavformat-dev ...` | `brew install ffmpeg` |
+Grab the latest binary from the [Releases page](https://github.com/SyntX34/SubtitleTool/releases). Each zip contains:
 
-> GPU acceleration is **detected at build time**. If the CUDA toolkit (or Metal on macOS) is present when you run CMake, the binary is built with GPU support; otherwise it falls back to CPU. To enable GPU acceleration, install the CUDA toolkit from [nvidia.com](https://www.nvidia.com/Download/index.aspx) and rebuild.
+| Platform | File | GPU backend |
+|---|---|---|
+| Windows | `subtitle_generator-windows-x64.zip` | Vulkan |
+| Linux | `subtitle_generator-linux-x64.zip` | Vulkan |
+| macOS | `subtitle_generator-macos-arm64.zip` | Metal |
+
+### Quick start
+
+```bash
+# 1. Download a model
+./scripts/download_model.sh base.en
+
+# 2. Run it
+./subtitle_generator video.mp4 --cpu
+```
+
+> If you hit GPU issues (crashes or hangs during model loading), pass `--cpu` to run entirely on CPU. See [Troubleshooting](#-troubleshooting) below.
 
 ---
 
-## 🚀 Quick Start
+## 🚀 Building from Source
 
 ### 1. Clone with submodules
 
 ```bash
-git clone --recursive https://github.com/SyntX34/subtitle-generator.git
-cd subtitle-generator
+git clone --recursive https://github.com/SyntX34/SubtitleTool.git
+cd SubtitleTool
 ```
 
 Already cloned without `--recursive`?
-
 ```bash
 git submodule update --init --recursive
 ```
@@ -63,15 +71,20 @@ git submodule update --init --recursive
 .\scripts\download_model.ps1 -Model base.en
 ```
 
-| Model | Size | Notes |
-|---|---|---|
-| `tiny.en` | ~75 MB | Fastest, least accurate |
-| `base.en` | ~145 MB | Good default for English |
-| `small.en` | ~465 MB | Better accuracy, still fast |
-| `medium.en` | ~1.5 GB | High accuracy, slower |
-| `large-v3` | ~3 GB | Best accuracy, multilingual, needs a GPU for real-time use |
+Run `--list-models` to see all available models:
 
-Drop the `.en` suffix (e.g. `base`, `small`) for the multilingual variants if you need non-English transcription or translation.
+| Model | Size | Description |
+|---|---|---|
+| `tiny.en` | ~75 MB | Fastest, English-only |
+| `tiny` | ~75 MB | Fastest, multilingual |
+| `base.en` | ~145 MB | Default, English-only |
+| `base` | ~145 MB | Default, multilingual |
+| `small.en` | ~465 MB | Good accuracy, English |
+| `small` | ~465 MB | Good accuracy, multilingual |
+| `medium.en` | ~1.5 GB | High accuracy, English |
+| `medium` | ~1.5 GB | High accuracy, multilingual |
+| `large-v3` | ~3.0 GB | Best accuracy, multilingual |
+| `large-v3-turbo` | ~1.5 GB | Fast large model, multilingual |
 
 ### 3. Build
 
@@ -80,16 +93,24 @@ cmake -B build -S .
 cmake --build build --config Release
 ```
 
-CMake auto-detects your platform's GPU backend. To force a CPU-only build (e.g. for a smaller, dependency-free binary):
+The build result is at `build/subtitle_generator` (Linux/macOS) or `build\Release\subtitle_generator.exe` (Windows).
 
-```bash
-cmake -B build -S . -DFORCE_CPU=ON
-```
+#### Build options
+
+| Option | Default | Description |
+|---|---|---|
+| `-DUSE_GPU=ON` | ON | Enable GPU acceleration |
+| `-DFORCE_CPU=ON` | OFF | Force CPU-only build |
+| `-DUSE_FFMPEG=ON` | ON | Enable FFmpeg for multi-format input |
 
 ### 4. Run
 
 ```bash
-./build/SubtitleTool audio.wav -m models/ggml-base.en.bin -o subtitles.srt
+# On Linux/macOS
+./build/subtitle_generator audio.mp4 -o subtitles.srt
+
+# On Windows
+.\build\Release\subtitle_generator.exe audio.mp4 -o subtitles.srt
 ```
 
 ---
@@ -97,10 +118,13 @@ cmake -B build -S . -DFORCE_CPU=ON
 ## 🛠️ Usage
 
 ```text
-SubtitleTool <audio_or_video_file> [OPTIONS]
+subtitle_generator <audio_or_video_file> [OPTIONS]
 
 MODEL
-  -m, --model <path>      Whisper model (default: models/ggml-base.en.bin)
+  -m, --model <name>      Model name or path (default: base.en)
+                          Examples: base.en, small, medium, ...
+                          Or use full path: models/ggml-base.en.bin
+      --list-models       List all available models with sizes
 
 OUTPUT
   -o, --output <path>     Output file (default: <input>.<format>)
@@ -119,99 +143,122 @@ PROCESSING
       --no-filler         Remove filler words (um, uh, er, ...)
 
 MISC
-  -s, --stream            Print subtitles live as they're generated
+  -s, --stream            Print subtitles live with timestamps
   -v, --verbose           Verbose whisper output
-  -h, --help              Show the full help message
+      --cpu, --force-cpu  Use CPU only (disable GPU)
+      --ffmpeg-path <dir> Path to FFmpeg binaries (e.g. D:\FFMPEG\bin)
+  -h, --help              Show this message
+```
+
+### Examples
+
+```bash
+# Basic usage — English-only, default model
+subtitle_generator movie.mp4
+
+# Spanish to English subtitles
+subtitle_generator pelicula.mp4 -l es --translate
+
+# High accuracy, live stream view, CPU-only
+subtitle_generator lecture.mp4 -m medium -s --cpu
+
+# All formats at once, 60-second chunks
+subtitle_generator podcast.mkv --all-formats --chunk 60
+
+# Specify FFmpeg path if auto-detection fails
+subtitle_generator video.mp4 --ffmpeg-path D:\FFMPEG\bin
 ```
 
 ---
 
 ## 🌍 Language & Translation
 
-`SubtitleTool` separates **what language is spoken** from **what language you want the output in**:
-
 | Flag | Meaning |
 |---|---|
-| `-l <code>` | The language *spoken in the audio*. Use `auto` to let whisper detect it, or set it explicitly if you already know it — this is faster and more accurate than auto-detection. |
-| `--translate` | Translate the transcription *into English*. whisper.cpp can only translate **into** English — it can't translate directly between two non-English languages. |
-
-**Example — Spanish video, English subtitles:**
+| `-l <code>` | Language *spoken in the audio*. Use `auto` for automatic detection, or set it explicitly for faster/more accurate results. |
+| `--translate` | Translate the transcription **into** English. |
 
 ```bash
-SubtitleTool pelicula.mp4 -l es --translate -o subtitles_en.srt
+# Spanish video → English subtitles
+subtitle_generator pelicula.mp4 -l es --translate -o english.srt
+
+# Japanese video → Japanese subtitles
+subtitle_generator anime.mkv -l ja -o subtitles_ja.srt
+
+# Unknown language → same-language transcript
+subtitle_generator interview.wav -l auto -o transcript.srt
 ```
 
-**Example — Japanese video, Japanese subtitles (no translation):**
+> whisper.cpp only translates **into** English. To translate Spanish→French, generate English subtitles first then use a text translation tool.
+
+---
+
+## ❗ Troubleshooting
+
+### GPU crashes or hangs on startup
+
+If the program crashes right after detecting your GPU (you see `ggml_vulkan:` or `ggml_cuda:` lines and then nothing), use `--cpu`:
 
 ```bash
-SubtitleTool anime.mkv -l ja -o subtitles_ja.srt
+subtitle_generator video.mp4 --cpu
 ```
 
-**Example — unknown language, transcribed in its original language:**
+This bypasses the GPU backend entirely and runs on CPU. The GPU-aware build is still used — GPU is just disabled at runtime. Future updates may fix the underlying GPU compatibility issue.
+
+### FFmpeg not found
+
+The tool automatically searches common FFmpeg install locations:
+- **Windows**: `D:\FFMPEG\bin`, `C:\FFmpeg\bin`, `C:\Program Files\FFmpeg\bin`, PATH
+- **Linux**: `/usr/lib`, `/usr/local/lib`, ldconfig paths
+- **macOS**: `/opt/homebrew/lib`, `/usr/local/lib`
+
+If your FFmpeg is in a non-standard location:
 
 ```bash
-SubtitleTool interview.wav -l auto -o subtitles.srt
+subtitle_generator video.mp4 --ffmpeg-path D:\my\ffmpeg\bin
 ```
 
-To translate from a language that isn't English into a *third* language (e.g. Spanish → French), run `SubtitleTool` once to get an English transcript or translation, then run that text through a text translation tool — whisper.cpp's translation path is English-only by design.
+When built with MSVC, FFmpeg DLLs are loaded lazily (`/DELAYLOAD`) so the binary can start even without FFmpeg present. Only WAV files work without FFmpeg.
 
-See every supported language code:
+### Model not found
 
 ```bash
-SubtitleTool --list-languages
+# Auto-resolve model name (no path needed):
+subtitle_generator audio.mp4 -m base.en
+
+# Or specify a full path:
+subtitle_generator audio.mp4 -m models/ggml-base.en.bin
+
+# List downloadable models:
+subtitle_generator --list-models
+
+# Download the default model:
+./scripts/download_model.sh base.en
 ```
+
+If the `models/` directory has .bin files but the one you requested isn't there, the tool will list what it found and suggest the correct download command.
 
 ---
 
 ## 📂 Project Layout
 
 ```
-subtitle-generator/
+SubtitleTool/
 ├── src/
-│   ├── main.cpp                 # CLI entry point, hardware/banner reporting
+│   ├── main.cpp                  # CLI entry point
 │   ├── SubtitleGenerator.{hpp,cpp}
-│   ├── AudioDecoder.{hpp,cpp}    # WAV (built-in) + FFmpeg (optional)
+│   ├── AudioDecoder.{hpp,cpp}     # WAV + FFmpeg decoding
+│   ├── FFmpegHelper.{hpp,cpp}     # Runtime FFmpeg detection
 │   ├── TimestampFormatter.{hpp,cpp}
-│   └── dl_windows.cpp            # Windows dynamic-library helpers
+│   └── dl_windows.cpp             # Windows helpers
 ├── scripts/
 │   ├── download_model.sh
 │   └── download_model.ps1
 ├── third_party/
-│   └── whisper.cpp/              # git submodule
-├── .github/workflows/build.yml   # Windows + Linux + macOS CI/release
+│   └── whisper.cpp/               # git submodule
+├── .github/workflows/build.yml
 └── CMakeLists.txt
 ```
-
----
-
-## 🧩 Building Without FFmpeg
-
-FFmpeg is optional. Without it, only `.wav` input is supported, but the build has zero external dependencies:
-
-```bash
-cmake -B build -S . -DUSE_FFMPEG=OFF
-```
-
----
-
-## 📈 Project Activity
-
-![Star history](https://api.star-history.com/svg?repos=SyntX34/SubtitleTool&type=Date)
-
-| Metric | Badge |
-|---|---|
-| ⭐ Stars | [![Stars](https://img.shields.io/github/stars/SyntX34/SubtitleTool?style=social)](https://github.com/SyntX34/SubtitleTool/stargazers) |
-| 🍴 Forks | [![Forks](https://img.shields.io/github/forks/SyntX34/SubtitleTool)](https://github.com/SyntX34/SubtitleTool/network/members) |
-| 📥 Total downloads | [![Downloads](https://img.shields.io/github/downloads/SyntX34/SubtitleTool/total)](https://github.com/SyntX34/SubtitleTool/releases) |
-| 📥 Latest release | [![Latest](https://img.shields.io/github/downloads/SyntX34/SubtitleTool/latest/total)](https://github.com/SyntX34/SubtitleTool/releases/latest) |
-
-> 📊 Detailed download counts per release and platform are available on the [Releases page](https://github.com/SyntX34/SubtitleTool/releases).
-
----
-
-## 🤝 Contributing
-
-Issues and pull requests are welcome. Please run the existing build matrix locally (or check the GitHub Actions results on your PR) before requesting review.
 
 ---
 
@@ -219,14 +266,6 @@ Issues and pull requests are welcome. Please run the existing build matrix local
 
 MIT — see [LICENSE](LICENSE).
 
----
-
 ## 👤 Author
 
-**SyntX**
-
-- GitHub: [github.com/SyntX34](https://github.com/SyntX34)
-- Steam: [steamcommunity.com/id/SyntX34](https://steamcommunity.com/id/SyntX34)
-- Discord: `nh_syntx`
-- Discord server: [discord.novazombie.com](https://discord.novazombie.com)
-- Instagram: [instagram.com/dfa.nh_syntx](https://instagram.com/dfa.nh_syntx)
+**SyntX** — [github.com/SyntX34](https://github.com/SyntX34)

@@ -1,6 +1,7 @@
 #include "SubtitleGenerator.hpp"
 #include "TimestampFormatter.hpp"
 #include "AudioDecoder.hpp"
+#include "FFmpegHelper.hpp"
 
 #include <algorithm>
 #include <chrono>
@@ -29,7 +30,7 @@
 namespace fs = std::filesystem;
 
 #ifndef SUBGEN_VERSION
-#  define SUBGEN_VERSION "2.0.0"
+#  define SUBGEN_VERSION "1.1.0"
 #endif
 #ifndef SUBGEN_GPU_BACKEND
 #  define SUBGEN_GPU_BACKEND "CPU"
@@ -165,6 +166,7 @@ struct Options {
     bool        no_filler      = false;
     bool        all_formats    = false;
     bool        force_cpu      = false;
+    std::string ffmpeg_path    = "";
 };
 
 static void printBanner() {
@@ -185,9 +187,10 @@ static void printUsage(const char* prog) {
 "  <file>                  Input file. Supported: "
         << AudioDecoder::supportedFormats() << "\n\n"
 "MODEL\n"
-"  -m, --model <path>      Whisper model (default: models/ggml-base.en.bin)\n"
-"                          Models: ggml-tiny.en.bin  ggml-base.en.bin\n"
-"                                  ggml-small.en.bin  ggml-medium.en.bin\n\n"
+"  -m, --model <name>      Model name or path (default: base.en)\n"
+"                          Examples: base.en, small, medium, ...\n"
+"                          Or use full path: models/ggml-base.en.bin\n"
+"      --list-models       List all available models with sizes\n\n"
 "OUTPUT\n"
 "  -o, --output <path>     Output file (default: <input>.<format>)\n"
 "  -f, --format <fmt>      srt | vtt | ass | json | txt  (default: srt)\n"
@@ -211,6 +214,7 @@ static void printUsage(const char* prog) {
 "MISC\n"
 "  -s, --stream            Print subtitles live as they're generated\n"
 "  -v, --verbose           Verbose whisper output\n"
+"      --ffmpeg-path <dir> Path to FFmpeg binaries (e.g. D:\\FFMPEG\\bin)\n"
 "      --cpu, --force-cpu  Use CPU only, even if compiled with GPU support\n"
 "  -h, --help              Show this message\n\n"
 "EXAMPLES\n"
@@ -236,12 +240,63 @@ static void printLanguages() {
                  "automatically.\n";
 }
 
+// ── Model registry ───────────────────────────────────────────────
+
+struct ModelInfo {
+    const char* name;        // passed to -m, e.g. "base.en"
+    const char* filename;    // actual file, e.g. "ggml-base.en.bin"
+    const char* description; // human-readable summary
+    const char* size_str;    // download size
+    bool  multilingual;      // false = English-only (smaller/faster)
+};
+
+static const ModelInfo s_models[] = {
+    {"tiny.en",     "ggml-tiny.en.bin",     "Fastest, English-only",     "75 MB",   false},
+    {"tiny",        "ggml-tiny.bin",        "Fastest, 100 languages",    "75 MB",   true},
+    {"base.en",     "ggml-base.en.bin",     "Default, English-only",     "145 MB",  false},
+    {"base",        "ggml-base.bin",         "Default, 100 languages",   "145 MB",  true},
+    {"small.en",    "ggml-small.en.bin",    "Good accuracy, English",    "465 MB",  false},
+    {"small",       "ggml-small.bin",        "Good accuracy, multi",     "465 MB",  true},
+    {"medium.en",   "ggml-medium.en.bin",   "High accuracy, English",   "1.5 GB",  false},
+    {"medium",      "ggml-medium.bin",       "High accuracy, multi",    "1.5 GB",  true},
+    {"large-v3",    "ggml-large-v3.bin",     "Best accuracy, multi",     "3.0 GB",  true},
+    {"large-v3-turbo", "ggml-large-v3-turbo.bin", "Fast large, multi",   "1.5 GB",  true},
+    {nullptr, nullptr, nullptr, nullptr, false}
+};
+
+static const ModelInfo* findModel(const std::string& name) {
+    for (int i = 0; s_models[i].name; ++i) {
+        if (name == s_models[i].name) return &s_models[i];
+    }
+    return nullptr;
+}
+
+static void printModels(const std::string& defaultModel = "base.en") {
+    std::cout << "Available Whisper models:\n\n";
+    std::cout << "  Name              Size      Description\n";
+    std::cout << "  ---------------------------------------------\n";
+    for (int i = 0; s_models[i].name; ++i) {
+        const auto& m = s_models[i];
+        bool isDefault = (m.name == defaultModel);
+        std::cout << "  " << std::left << std::setw(17) << m.name
+                  << std::setw(10) << m.size_str
+                  << m.description;
+        if (isDefault) std::cout << "  (default)";
+        std::cout << "\n";
+    }
+    std::cout << "\n  Download: https://huggingface.co/ggerganov/whisper.cpp/tree/main\n";
+    std::cout << "  Place .bin files in the 'models/' directory.\n";
+    std::cout << "  Or use:  ./scripts/download_model.sh <name>\n";
+    std::cout << "  Or use:  .\\scripts\\download_model.ps1 -Model <name>\n";
+}
+
 static bool parse(int argc, char* argv[], Options& opt) {
     if (argc < 2) { printUsage(argv[0]); return false; }
 
     std::string first = argv[1];
     if (first == "-h" || first == "--help") { printUsage(argv[0]); return false; }
     if (first == "--list-languages") { printLanguages(); return false; }
+    if (first == "--list-models")    { printModels(); return false; }
 
     opt.audio_path = argv[1];
 
@@ -256,6 +311,7 @@ static bool parse(int argc, char* argv[], Options& opt) {
         };
         if      (a == "-h" || a == "--help")     { printUsage(argv[0]); return false; }
         else if (a == "--list-languages")        { printLanguages(); return false; }
+        else if (a == "--list-models")           { printModels(); return false; }
         else if (a == "-m" || a == "--model")    { opt.model_path  = next(); }
         else if (a == "-o" || a == "--output")   { opt.output_path = next(); }
         else if (a == "-f" || a == "--format")   { opt.format      = next(); }
@@ -268,6 +324,7 @@ static bool parse(int argc, char* argv[], Options& opt) {
         else if (a == "--all-formats")           { opt.all_formats = true; }
         else if (a == "-s" || a == "--stream")   { opt.stream      = true; }
         else if (a == "-v" || a == "--verbose")  { opt.verbose     = true; }
+        else if (a == "--ffmpeg-path")            { opt.ffmpeg_path = next(); }
         else if (a == "--cpu" || a == "--force-cpu") { opt.force_cpu = true; }
         else { std::cerr << "Unknown option: " << a << "\n"; return false; }
     }
@@ -288,6 +345,14 @@ static bool parse(int argc, char* argv[], Options& opt) {
         return false;
     }
 
+    // Auto-resolve model name to file path
+    // If user passed "-m base.en", resolve to "models/ggml-base.en.bin"
+    if (const ModelInfo* m = findModel(opt.model_path)) {
+        opt.model_path = std::string("models/") + m->filename;
+    }
+    // If it's not a known name, leave as-is (may be a full path like
+    // "models/ggml-medium.bin" or a custom path)
+
     if (opt.output_path.empty()) {
         fs::path p(opt.audio_path);
         opt.output_path = p.stem().string() + "." + opt.format;
@@ -295,17 +360,36 @@ static bool parse(int argc, char* argv[], Options& opt) {
     return true;
 }
 
+// Live subtitle display — shows the latest transcribed text
+// alongside the progress bar.
+static std::string g_lastSubtitleText;
+
 static void drawProgress(double cur, double total) {
     if (total <= 0) return;
     int pct    = std::min(100, static_cast<int>(cur / total * 100));
     int filled = pct / 2;  // 50-char bar
+    // Build progress bar line with live subtitle text
     std::cout << "\r[";
     for (int i = 0; i < 50; ++i)
         std::cout << (i < filled ? '#' : '-');
     std::cout << "] " << std::setw(3) << pct << "%  "
               << TimestampFormatter::formatDuration(cur) << " / "
-              << TimestampFormatter::formatDuration(total) << "   "
-              << std::flush;
+              << TimestampFormatter::formatDuration(total);
+
+    // Show latest subtitle text if available
+    if (!g_lastSubtitleText.empty() && cur < total) {
+        // Truncate to ~60 chars to keep the line manageable
+        std::string snippet = g_lastSubtitleText;
+        if (snippet.size() > 60) {
+            snippet.resize(57);
+            snippet += "...";
+        }
+        std::cout << "  |  " << snippet;
+    }
+
+    // Erase to end of line (\033[K) so shorter lines don't leave
+    // visible remnants when they follow longer lines
+    std::cout << "\033[K" << std::flush;
     if (pct >= 100) std::cout << "\n";
 }
 
@@ -320,6 +404,10 @@ int main(int argc, char* argv[]) {
     Options opt;
     if (!parse(argc, argv, opt)) return 1;
 
+    // Initialize FFmpeg runtime detection (must be AFTER option parsing
+    // so --ffmpeg-path is available)
+    FFmpegHelper::init(opt.ffmpeg_path);
+
     std::cout << "System info:\n";
     print_hardware_info();
     std::cout << "\n";
@@ -330,8 +418,46 @@ int main(int argc, char* argv[]) {
     }
     if (!fs::exists(opt.model_path)) {
         std::cerr << "[ERROR] Model not found: " << opt.model_path << "\n";
-        std::cerr << "  Download a model from: "
-                     "https://huggingface.co/ggerganov/whisper.cpp/tree/main\n";
+        std::cerr << "\n";
+
+        // Check if models/ directory exists and has any .bin files
+        fs::path modelsDir = fs::path(opt.model_path).parent_path();
+        if (modelsDir.empty()) modelsDir = "models";
+
+        bool foundAny = false;
+        if (fs::exists(modelsDir)) {
+            for (const auto& entry : fs::directory_iterator(modelsDir)) {
+                if (entry.path().extension() == ".bin") {
+                    if (!foundAny) {
+                        std::cerr << "  Found these model files:\n";
+                        foundAny = true;
+                    }
+                    std::cerr << "    " << entry.path().filename().string() << "\n";
+                }
+            }
+        }
+
+        if (!foundAny && fs::exists(modelsDir)) {
+            std::cerr << "  The '" << modelsDir.string() << "' directory exists but has no .bin files.\n";
+        } else if (!fs::exists(modelsDir)) {
+            std::cerr << "  The '" << modelsDir.string() << "' directory does not exist.\n";
+        }
+
+        // Suggest the correct model name if user used the file path directly
+        std::string pathFilename = fs::path(opt.model_path).filename().string();
+        if (pathFilename.rfind("ggml-", 0) == 0) {
+            std::string modelName = pathFilename.substr(5, pathFilename.size() - 9);  // strip "ggml-" prefix and ".bin" suffix
+        const ModelInfo* m = findModel(modelName);
+            if (m) {
+                std::cerr << "  Tip: Use -m " << modelName << " (without 'ggml-' prefix and '.bin' suffix)\n";
+            }
+        }
+
+        std::cerr << "\n  Run with --list-models to see all available models and sizes.\n";
+        std::cerr << "\n  Quick download:\n";
+        std::cerr << "    Linux/macOS: ./scripts/download_model.sh\n";
+        std::cerr << "    Windows:     .\\scripts\\download_model.ps1\n";
+        std::cerr << "    Manual:      https://huggingface.co/ggerganov/whisper.cpp/tree/main\n";
         return 1;
     }
 
@@ -358,13 +484,18 @@ int main(int argc, char* argv[]) {
 
         gen.setInterruptFlag(&g_interrupted);
 
-        if (opt.stream) {
-            gen.setChunkCallback([](const std::vector<Subtitle>& subs) {
-                for (const auto& s : subs)
-                    std::cout << "  [" << TimestampFormatter::formatSRT(s.start_time)
+        // Always capture subtitles for the live progress display.
+        // The --stream flag additionally prints them with timestamps.
+        const bool doStream = opt.stream;
+        gen.setChunkCallback([doStream](const std::vector<Subtitle>& subs) {
+            for (const auto& s : subs) {
+                g_lastSubtitleText = s.text;
+                if (doStream) {
+                    std::cout << "\n  [" << TimestampFormatter::formatSRT(s.start_time)
                               << "] " << s.text << "\n";
-            });
-        }
+                }
+            }
+        });
 
         std::string lang_desc = opt.language;
         if (opt.translate) lang_desc += " -> en (translate)";

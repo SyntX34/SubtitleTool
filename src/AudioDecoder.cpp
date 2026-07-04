@@ -1,4 +1,5 @@
 #include "AudioDecoder.hpp"
+#include "FFmpegHelper.hpp"
 
 #include <algorithm>
 #include <cstdint>
@@ -46,6 +47,8 @@ bool AudioDecoder::isSupportedFormat(const std::string& path) {
     std::string ext = fileExtension(path);
     if (ext == ".wav") return true;
 #ifdef HAVE_FFMPEG
+    // Runtime check: FFmpeg must be findable at run time too
+    if (!FFmpegHelper::available()) return false;
     static const char* exts[] = {
         ".mp3", ".mp4", ".m4a", ".aac", ".flac", ".ogg", ".opus",
         ".mkv", ".webm", ".avi", ".mov", ".wmv", ".wma", ".alac",
@@ -60,7 +63,9 @@ bool AudioDecoder::isSupportedFormat(const std::string& path) {
 std::string AudioDecoder::supportedFormats() {
     std::string s = "WAV";
 #ifdef HAVE_FFMPEG
-    s += ", MP3, MP4, M4A, AAC, FLAC, OGG, OPUS, MKV, WEBM, AVI, MOV, WMA, ALAC, AIFF, TS";
+    if (FFmpegHelper::available()) {
+        s += ", MP3, MP4, M4A, AAC, FLAC, OGG, OPUS, MKV, WEBM, AVI, MOV, WMA, ALAC, AIFF, TS";
+    }
 #endif
     return s;
 }
@@ -76,14 +81,23 @@ void AudioDecoder::decode(const std::string& path,
     }
 
 #ifdef HAVE_FFMPEG
-    decodeFFmpeg(path, pcm_out, duration);
-    return;
+    if (FFmpegHelper::available()) {
+        decodeFFmpeg(path, pcm_out, duration);
+        return;
+    }
 #endif
 
     throw std::runtime_error(
         "Unsupported format '" + ext + "'.\n"
         "Supported: " + supportedFormats() + "\n"
-        "Tip: Rebuild with -DUSE_FFMPEG=ON for mp3/mp4/mkv support.");
+#ifdef HAVE_FFMPEG
+        "Tip: Make sure FFmpeg is installed and on your PATH, "
+        "or pass --ffmpeg-path to locate it.\n"
+        "Download from: https://ffmpeg.org/download.html\n"
+#else
+        "Tip: Rebuild with -DUSE_FFMPEG=ON for mp3/mp4/mkv support.\n"
+#endif
+        );
 }
 
 void AudioDecoder::decodeWAV(const std::string& path,
@@ -531,7 +545,8 @@ std::unique_ptr<AudioDecoder::Decoder> AudioDecoder::open(const std::string& pat
     if (ext == ".wav")
         return std::make_unique<WAVDecoder>(path);
 #ifdef HAVE_FFMPEG
-    return std::make_unique<FFmpegDecoder>(path);
+    if (FFmpegHelper::available())
+        return std::make_unique<FFmpegDecoder>(path);
 #endif
     throw std::runtime_error("Unsupported format (chunked): " + ext);
 }
