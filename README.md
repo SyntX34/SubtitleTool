@@ -36,14 +36,15 @@ Grab the latest binary from the [Releases page](https://github.com/SyntX34/Subti
 ### Quick start
 
 ```bash
-# 1. Download a model
-./scripts/download_model.sh base.en
+# 1. Run it — if no models are found, it'll show the list and let you download
+./subtitle_generator video.mp4
 
-# 2. Run it
-./subtitle_generator video.mp4 --cpu
+# After downloading, re-run to start transcription:
+./subtitle_generator video.mp4
 ```
 
-> If you hit GPU issues (crashes or hangs during model loading), pass `--cpu` to run entirely on CPU. See [Troubleshooting](#-troubleshooting) below.
+> Downloads show live progress from aria2c, curl, or wget. See [Model download](#-downloading-models) below.
+> If you hit GPU issues, pass `--cpu`. See [Troubleshooting](#-troubleshooting).
 
 ---
 
@@ -63,6 +64,55 @@ git submodule update --init --recursive
 
 ### 2. Download a model
 
+**The easiest way:** just run the tool — if no models are found, it shows the full list and prompts you to type model names to download:
+
+```
+$ subtitle_generator video.mp4
+
+[INFO] No model files found in the 'models/' directory.
+
+Available models:
+  #  Name                 Size      Description
+  --------------------------------------------------
+  1  tiny.en              75 MB     Fastest, English-only (download)
+  2  tiny                 75 MB     Fastest, multilingual (download)
+  3  base.en              145 MB    Default, English-only (download)
+  ...
+
+Enter model name(s) to download (space-separated), or just press Enter
+> base.en small
+
+========== Downloading base.en ==========
+  from: https://huggingface.co/.../ggml-base.en.bin
+  to  : models/ggml-base.en.bin
+[#b6c452 145MiB/145MiB(100%) CN:1 DL:11MiB ETA:0s]   ← live progress!
+
+  >> Done! base.en saved to models/
+
+========== Downloading small ==========
+  ...
+
+=========================================================
+  2 model(s) downloaded successfully!
+  Re-run the tool to start transcription.
+=========================================================
+```
+
+**Or use the built-in downloader directly:**
+
+```bash
+# Download a single model
+./subtitle_generator --download-model base.en
+
+# Download multiple models at once
+./subtitle_generator --download-model base.en small medium
+
+# See all available models
+./subtitle_generator --list-models
+```
+
+**Or use the download scripts:**
+
 ```bash
 # Linux / macOS
 ./scripts/download_model.sh base.en
@@ -71,13 +121,13 @@ git submodule update --init --recursive
 .\scripts\download_model.ps1 -Model base.en
 ```
 
-Run `--list-models` to see all available models:
+**Available models:**
 
 | Model | Size | Description |
 |---|---|---|
 | `tiny.en` | ~75 MB | Fastest, English-only |
 | `tiny` | ~75 MB | Fastest, multilingual |
-| `base.en` | ~145 MB | Default, English-only |
+| `base.en` | ~145 MB | **Default**, English-only |
 | `base` | ~145 MB | Default, multilingual |
 | `small.en` | ~465 MB | Good accuracy, English |
 | `small` | ~465 MB | Good accuracy, multilingual |
@@ -86,7 +136,7 @@ Run `--list-models` to see all available models:
 | `large-v3` | ~3.0 GB | Best accuracy, multilingual |
 | `large-v3-turbo` | ~1.5 GB | Fast large model, multilingual |
 
-### 3. Build
+Each model is downloaded into the `models/` folder as a `.bin` file. The tool picks up any `.bin` file you drop there automatically.
 
 ```bash
 cmake -B build -S .
@@ -121,10 +171,14 @@ The build result is at `build/subtitle_generator` (Linux/macOS) or `build\Releas
 subtitle_generator <audio_or_video_file> [OPTIONS]
 
 MODEL
-  -m, --model <name>      Model name or path (default: base.en)
-                          Examples: base.en, small, medium, ...
-                          Or use full path: models/ggml-base.en.bin
-      --list-models       List all available models with sizes
+  -m, --model <name>      Model name, index, or path (default: base.en)
+                          Examples: -m base.en, -m small, -m 1, -m 3
+                          Use by index: -m 1 (see --list-models for numbers)
+                          Or full path: -m models/ggml-base.en.bin
+      --list-models       List all available models with sizes and indices
+      --download-model    Download one or more models and exit
+                          Usage: --download-model <name1> [name2 ...]
+                          Example: --download-model base.en small medium
 
 OUTPUT
   -o, --output <path>     Output file (default: <input>.<format>)
@@ -153,8 +207,20 @@ MISC
 ### Examples
 
 ```bash
-# Basic usage — English-only, default model
+# Basic usage — auto-detects model, prompts if none found
 subtitle_generator movie.mp4
+
+# After downloading, re-run with the same command:
+subtitle_generator movie.mp4 -l en --translate -o subtitles.srt
+
+# Select model by name
+subtitle_generator movie.mp4 -m medium
+
+# Select model by index (see --list-models for the list)
+subtitle_generator movie.mp4 -m 3
+
+# Download models without transcribing
+subtitle_generator --download-model base.en small medium
 
 # Spanish to English subtitles
 subtitle_generator pelicula.mp4 -l es --translate
@@ -222,21 +288,34 @@ When built with MSVC, FFmpeg DLLs are loaded lazily (`/DELAYLOAD`) so the binary
 
 ### Model not found
 
+The tool automatically handles model selection:
+
+- **No models at all?** Shows all downloadable models with sizes, prompts you to type model names to download, shows live download progress, then tells you to **re-run** to start transcription.
+- **Single model?** Uses it automatically.
+- **Multiple models?** Shows an interactive picker with numbered list.
+- **Select by index:** `-m 1`, `-m 2`, etc. (run `--list-models` to see the numbered list)
+- **Non-downloaded model?** Offers to download it, shows progress, then tells you to re-run.
+
 ```bash
 # Auto-resolve model name (no path needed):
 subtitle_generator audio.mp4 -m base.en
 
+# Select by index:
+subtitle_generator audio.mp4 -m 3
+
+# Download missing models on the fly (without an audio file):
+subtitle_generator --download-model small.en medium
+
 # Or specify a full path:
 subtitle_generator audio.mp4 -m models/ggml-base.en.bin
 
-# List downloadable models:
+# List downloadable models with sizes and indices:
 subtitle_generator --list-models
-
-# Download the default model:
-./scripts/download_model.sh base.en
 ```
 
-If the `models/` directory has .bin files but the one you requested isn't there, the tool will list what it found and suggest the correct download command.
+> ⚠️ **Important**: When no models are found and you download them, the tool exits with a "Re-run" message instead of auto-continuing. This lets you download multiple models and switch between them freely.
+
+If the `models/` directory has .bin files but the one you requested isn't there, the tool will list what it found and prompt you to pick one.
 
 ---
 
