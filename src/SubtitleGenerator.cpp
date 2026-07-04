@@ -200,9 +200,19 @@ void SubtitleGenerator::generate(const std::string& audio_path) {
               << std::setprecision(1) << m_stats.realtime_factor << "x real-time)\n";
 }
 
+struct WhisperCbCtx {
+    SubtitleGenerator* self;
+    double chunk_offset;
+    double chunk_duration;
+    double total_duration;
+};
+
 void SubtitleGenerator::transcribeBuffer(const std::vector<float>& pcm,
                                          double audio_offset_seconds) {
     if (pcm.empty()) return;
+
+    double chunk_duration = static_cast<double>(pcm.size()) /
+                            AudioDecoder::TARGET_SAMPLE_RATE;
 
     whisper_full_params params =
         whisper_full_default_params(WHISPER_SAMPLING_GREEDY);
@@ -214,14 +224,56 @@ void SubtitleGenerator::transcribeBuffer(const std::vector<float>& pcm,
     params.max_tokens       = m_config.max_tokens;
     params.n_threads        = m_config.n_threads;
     params.translate        = m_config.translate;
-    params.offset_ms        = 0;      // apply offset
+    params.offset_ms        = 0;
 
     // Language
     if (m_config.language == "auto" || m_config.language.empty()) {
-        params.language = nullptr;  // auto-detect whisper
+        params.language = nullptr;
     } else {
         params.language = m_config.language.c_str();
     }
+
+    // ── Real-time progress callback ───────────────────────────────
+    // Updates the progress bar during transcription instead of only
+    // at chunk boundaries, so the user sees smooth progress even for
+    // a single chunk.
+    WhisperCbCtx cb_ctx{this, audio_offset_seconds, chunk_duration, m_audio_duration};
+    params.progress_callback_user_data = &cb_ctx;
+    params.progress_callback = [](struct whisper_context* /*ctx*/,
+                                  struct whisper_state* /*state*/,
+                                  int progress, void* user_data) {
+        auto* cb = static_cast<WhisperCbCtx*>(user_data);
+        if (cb->self->m_progress_fn && cb->total_duration > 0) {
+            double current = cb->chunk_offset
+                + (cb->chunk_duration * progress / 100.0);
+            if (current > cb->total_duration)
+                current = cb->total_duration;
+            cb->self->m_progress_fn(current, cb->total_duration);
+        }
+    };
+
+    // ── Real-time segment streaming callback ──────────────────────
+    // Fires each time whisper decodes a new segment, so subtitles
+    // appear in real-time on stdout (and in the progress bar area)
+    // rather than all at once after the chunk finishes.
+    params.new_segment_callback_user_data = &cb_ctx;
+    params.new_segment_callback = [](struct whisper_context* ctx,
+                                     struct whisper_state* /*state*/,
+                                     int n_new, void* user_data) {
+        auto* cb = static_cast<WhisperCbCtx*>(user_data);
+        int total = whisper_full_n_segments(ctx);
+        for (int i = total - n_new; i < total; ++i) {
+            const char* text = whisper_full_get_segment_text(ctx, i);
+            if (!text) continue;
+            double t0 = whisper_full_get_segment_t0(ctx, i) / 100.0
+                        + cb->chunk_offset;
+            double t1 = whisper_full_get_segment_t1(ctx, i) / 100.0
+                        + cb->chunk_offset;
+            if (t1 > t0 && cb->self->m_segment_fn) {
+                cb->self->m_segment_fn(Subtitle(t0, t1, text, 1.0f));
+            }
+        }
+    };
 
     if (whisper_full(m_whisper_ctx, params, pcm.data(),
                      static_cast<int>(pcm.size())) != 0) {
@@ -253,7 +305,7 @@ void SubtitleGenerator::transcribeBuffer(const std::vector<float>& pcm,
         int   conf_cnt = 0;
         for (int t = 0; t < n_tokens; ++t) {
             whisper_token_data td = whisper_full_get_token_data(m_whisper_ctx, i, t);
-            if (td.id >= whisper_token_eot(m_whisper_ctx)) continue; // skip special
+            if (td.id >= whisper_token_eot(m_whisper_ctx)) continue;
             conf_sum += td.p;
             ++conf_cnt;
         }

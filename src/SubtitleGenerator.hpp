@@ -98,6 +98,13 @@ public:
     using ChunkFn = std::function<void(const std::vector<Subtitle>&)>;
     void setChunkCallback(ChunkFn fn) { m_chunk_fn = fn; }
 
+    /// Callback fired for each new segment as whisper decodes it in real-time.
+    /// Unlike setChunkCallback (which fires after a full chunk is processed),
+    /// this fires immediately as each segment is transcribed — enabling
+    /// per-second subtitle streaming.
+    using SegmentFn = std::function<void(const Subtitle&)>;
+    void setSegmentCallback(SegmentFn fn) { m_segment_fn = fn; }
+
     /**
      * Provide a pointer to an external interrupt flag (e.g. set by a
      * SIGINT handler). When the flag becomes non-zero, generate() will
@@ -152,6 +159,7 @@ private:
     Stats                   m_stats;
     ProgressFn              m_progress_fn;
     ChunkFn                 m_chunk_fn;
+    SegmentFn               m_segment_fn;
     double                  m_audio_duration = 0.0;
     volatile sig_atomic_t*  m_interrupt_flag = nullptr;
 };

@@ -849,7 +849,6 @@ static void drawProgress(double cur, double total) {
     // Erase to end of line (\033[K) so shorter lines don't leave
     // visible remnants when they follow longer lines
     std::cout << "\033[K" << std::flush;
-    if (pct >= 100) std::cout << "\n";
 }
 
 int main(int argc, char* argv[]) {
@@ -1007,6 +1006,17 @@ int main(int argc, char* argv[]) {
                     std::cout << "\n  [" << TimestampFormatter::formatSRT(s.start_time)
                               << "] " << s.text << "\n";
                 }
+            }
+        });
+
+        // Real-time segment callback — fires as whisper decodes each
+        // segment, showing subtitles immediately on the progress bar line
+        // (and printing when --stream is enabled).
+        gen.setSegmentCallback([doStream](const Subtitle& s) {
+            g_lastSubtitleText = s.text;
+            if (doStream) {
+                std::cout << "\n  [" << TimestampFormatter::formatSRT(s.start_time)
+                          << "] " << s.text << "\n";
             }
         });
 
