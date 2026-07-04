@@ -304,7 +304,7 @@ static bool isSafePath(const std::string& s) {
 
 /// Try to download a file using the best available method.
 /// Returns true on success.
-static bool downloadFile(const std::string& url, const std::string& dest) {
+static bool downloadFile(const std::string& url, const std::string& dest, const std::string& label) {
     if (!isSafeURL(url) || !isSafePath(dest)) {
         std::cerr << "  [ERROR] Invalid download URL or path\n";
         return false;
@@ -313,89 +313,82 @@ static bool downloadFile(const std::string& url, const std::string& dest) {
     fs::path parent = fs::path(dest).parent_path();
     if (!parent.empty()) fs::create_directories(parent);
 
-    std::cout << "  Downloading...\n";
-    std::cout << "    from: " << url << "\n";
-    std::cout << "    to  : " << dest << "\n\n";
+    std::cout << "\n========== Downloading " << label << " ==========\n";
+    std::cout << "  from: " << url << "\n";
+    std::cout << "  to  : " << dest << "\n";
+    std::cout.flush();
 
     auto exists_nonempty = [&]() { return fs::exists(dest) && fs::file_size(dest) > 0; };
 
 #ifdef _WIN32
-    // Method 1: Windows built-in URLDownloadToFile (zero dependencies)
+    // Method 1: Windows built-in URLDownloadToFile (zero dependencies, no progress bar)
     {
         typedef long (__stdcall *URLDownloadFn)(void*, const char*, const char*, int, void*);
         HMODULE urlmon = LoadLibraryA("urlmon.dll");
         if (urlmon) {
             URLDownloadFn fn = (URLDownloadFn)GetProcAddress(urlmon, "URLDownloadToFileA");
             if (fn) {
-                std::cout << "  Using Windows built-in downloader...\n";
                 long hr = fn(nullptr, url.c_str(), dest.c_str(), 0, nullptr);
                 FreeLibrary(urlmon);
-                if (hr == 0 && exists_nonempty()) return true;
-                std::cout << "  Windows downloader failed, trying aria2c...\n";
+                if (hr == 0 && exists_nonempty()) { return true; }
             } else {
                 FreeLibrary(urlmon);
             }
         }
     }
 
-    // Method 2: aria2c (fast, multi-connection)
+    // Method 2: aria2c (fast, multi-connection, shows progress by default)
     {
         std::string cmd = "aria2c -x 4 -s 4 -d \"" + parent.string()
             + "\" -o \"" + fs::path(dest).filename().string()
             + "\" \"" + url + "\"";
-        std::cout << "  Using aria2c...\n";
         int ret = std::system(cmd.c_str());
-        if (ret == 0 && exists_nonempty()) return true;
+        if (ret == 0 && exists_nonempty()) { return true; }
     }
 
-    // Method 3: curl
+    // Method 3: curl (shows progress bar)
     {
         std::string part = dest + ".part";
         std::string cmd = "curl -L --fail --progress-bar -o \"" + part + "\" \"" + url + "\"";
-        std::cout << "  Using curl...\n";
         int ret = std::system(cmd.c_str());
         if (ret == 0) {
             std::rename(part.c_str(), dest.c_str());
-            if (exists_nonempty()) return true;
+            if (exists_nonempty()) { return true; }
         }
     }
 
-    // Method 4: PowerShell
+    // Method 4: PowerShell (fallback, no progress bar)
     {
         std::string cmd = "powershell -Command \"& {Invoke-WebRequest -Uri '" + url + "' -OutFile '" + dest + "'}\"";
-        std::cout << "  Using PowerShell...\n";
         int ret = std::system(cmd.c_str());
-        if (ret == 0 && exists_nonempty()) return true;
+        if (ret == 0 && exists_nonempty()) { return true; }
     }
 #else
-    // Method 1: aria2c (fast, multi-connection)
+    // Method 1: aria2c (fast, multi-connection, shows progress by default)
     {
         std::string cmd = "aria2c -x 4 -s 4 -d \"" + parent.string()
             + "\" -o \"" + fs::path(dest).filename().string()
             + "\" \"" + url + "\"";
-        std::cout << "  Using aria2c...\n";
         int ret = std::system(cmd.c_str());
-        if (ret == 0 && exists_nonempty()) return true;
+        if (ret == 0 && exists_nonempty()) { return true; }
     }
 
-    // Method 2: curl
+    // Method 2: curl (shows progress bar)
     {
         std::string part = dest + ".part";
         std::string cmd = "curl -L --fail --progress-bar -o \"" + part + "\" \"" + url + "\"";
-        std::cout << "  Using curl...\n";
         int ret = std::system(cmd.c_str());
         if (ret == 0) {
             std::rename(part.c_str(), dest.c_str());
-            if (exists_nonempty()) return true;
+            if (exists_nonempty()) { return true; }
         }
     }
 
-    // Method 3: wget
+    // Method 3: wget (shows progress)
     {
         std::string cmd = "wget --show-progress -O \"" + dest + "\" \"" + url + "\"";
-        std::cout << "  Using wget...\n";
         int ret = std::system(cmd.c_str());
-        if (ret == 0 && exists_nonempty()) return true;
+        if (ret == 0 && exists_nonempty()) { return true; }
     }
 #endif
 
@@ -573,35 +566,36 @@ static void printModelMenu(const std::vector<SelectableModel>& all, const std::s
     std::cout << "\n  Download models: https://huggingface.co/ggerganov/whisper.cpp/tree/main\n";
 }
 
-/// Try to download a model and return the local path, or empty on failure.
-static std::string downloadAndGetPath(const SelectableModel& model) {
-    if (model.downloaded) return model.path;
+/// Try to download a model. Returns true on success.
+/// After a successful download, the tool should tell the user to re-run.
+static bool downloadOneModel(const SelectableModel& model, bool quietPrompt = false) {
+    if (model.downloaded) return true;
 
     std::string url = modelURL(model.name);
     std::string dest = modelPath(model.name);
 
-    std::cout << "\n  Model '" << model.name << "' is not downloaded yet.\n";
-    std::cout << "  Size: " << model.size_str << "\n";
-    std::cout << "  Download now? [Y/n]: ";
-    std::cout.flush();
+    std::cout << "\n  Model '" << model.name << "' (" << model.size_str << ") is not downloaded yet.\n";
 
-    std::string input;
-    std::getline(std::cin, input);
-    if (!input.empty() && input != "y" && input != "Y" && input != "yes") {
-        std::cout << "  Skipping download.\n";
-        return "";
+    if (!quietPrompt) {
+        std::cout << "  Download now? [Y/n]: ";
+        std::cout.flush();
+        std::string input;
+        std::getline(std::cin, input);
+        if (!input.empty() && input != "y" && input != "Y" && input != "yes") {
+            std::cout << "  Skipping download.\n";
+            return false;
+        }
     }
 
-    if (downloadFile(url, dest)) {
-        std::cout << "\n  Download complete!\n";
-        return dest;
+    bool ok = downloadFile(url, dest, model.name);
+    if (ok) {
+        std::cout << "\n  >> Done! " << model.name << " saved to models/\n";
+    } else {
+        std::cerr << "\n  [ERROR] Download failed. Try manually:\n";
+        std::cerr << "    ./scripts/download_model.sh " << model.name << "\n";
+        std::cerr << "    or: .\\scripts\\download_model.ps1 -Model " << model.name << "\n";
     }
-
-    std::cerr << "\n  [ERROR] Download failed.\n";
-    std::cerr << "  Try manually:\n";
-    std::cerr << "    ./scripts/download_model.sh " << model.name << "\n";
-    std::cerr << "    or: .\\scripts\\download_model.ps1 -Model " << model.name << "\n";
-    return "";
+    return ok;
 }
 
 /// Show an interactive model picker and return the chosen path.
@@ -645,9 +639,12 @@ static std::string interactiveModelPicker(const std::vector<SelectableModel>& al
         return "";
     }
 
-    // If it's not downloaded, offer to download it
+    // If it's not downloaded, offer to download it, then tell user to re-run
     if (!selected->downloaded) {
-        return downloadAndGetPath(*selected);
+        if (downloadOneModel(*selected)) {
+            std::cout << "\n  >> Model downloaded! Re-run the tool to use it.\n";
+        }
+        return "";
     }
 
     return selected->path;
@@ -677,8 +674,8 @@ static bool downloadModels(const std::vector<std::string>& names) {
             continue;
         }
 
-        std::string path = downloadAndGetPath(*model);
-        if (path.empty()) {
+        std::cout << "\n";
+        if (!downloadOneModel(*model, true)) {
             all_ok = false;
         }
     }
@@ -797,10 +794,11 @@ static bool parse(int argc, char* argv[], Options& opt) {
                     if (selected.downloaded) {
                         opt.model_path = selected.path;
                     } else {
-                        // Selected model isn't downloaded — offer to download
-                        std::string path = downloadAndGetPath(selected);
-                        if (path.empty()) return false;
-                        opt.model_path = path;
+                        // Selected model isn't downloaded — offer to download, then tell user to re-run
+                        if (downloadOneModel(selected)) {
+                            std::cout << "\n  >> Model downloaded! Re-run the tool to use it.\n";
+                        }
+                        return false;
                     }
                 }
             }
@@ -914,26 +912,30 @@ int main(int argc, char* argv[]) {
                 if (!allValid) return 1;
 
                 // Download each model
-                bool anyFailed = false;
+                int succeeded = 0, failed = 0;
                 for (const auto& name : toDownload) {
                     const SelectableModel* def = nullptr;
                     for (const auto& m : all)
                         if (m.name == name) { def = &m; break; }
                     if (!def) continue;
 
-                    std::string path = downloadAndGetPath(*def);
-                    if (path.empty()) {
-                        anyFailed = true;
+                    if (downloadOneModel(*def, true)) {
+                        ++succeeded;
                     } else {
-                        // Use the LAST successfully downloaded model for transcription
-                        opt.model_path = path;
+                        ++failed;
                     }
                 }
 
-                if (anyFailed) {
-                    std::cerr << "[ERROR] Some models failed to download.\n";
-                    return 1;
+                if (failed > 0) {
+                    std::cerr << "\n[ERROR] " << failed << " model(s) failed to download.\n";
                 }
+                if (succeeded > 0) {
+                    std::cout << "\n=========================================================\n";
+                    std::cout << "  " << succeeded << " model(s) downloaded successfully!\n";
+                    std::cout << "  Re-run the tool to start transcription.\n";
+                    std::cout << "=========================================================\n";
+                }
+                return 1;
             } else {
                 return 1;
             }
