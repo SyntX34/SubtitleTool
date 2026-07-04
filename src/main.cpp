@@ -273,6 +273,134 @@ static const ModelInfo* findKnownModel(const std::string& name) {
     return nullptr;
 }
 
+// ── Model download helper ───────────────────────────────────────
+
+static const char* MODEL_BASE_URL = "https://huggingface.co/ggerganov/whisper.cpp/resolve/main";
+
+/// Build download URL for a model name.
+static std::string modelURL(const std::string& name) {
+    if (const ModelInfo* m = findKnownModel(name))
+        return std::string(MODEL_BASE_URL) + "/" + m->filename;
+    return std::string(MODEL_BASE_URL) + "/ggml-" + name + ".bin";
+}
+
+/// Build local file path for a model name.
+static std::string modelPath(const std::string& name) {
+    if (const ModelInfo* m = findKnownModel(name))
+        return std::string("models/") + m->filename;
+    return "models/ggml-" + name + ".bin";
+}
+
+/// Sanitize a URL for use in shell commands (disallow dangerous chars).
+static bool isSafeURL(const std::string& s) {
+    return s.find_first_not_of("abcdefghijklmnopqrstuvwxyz0123456789.-_/:~?#[]@!$&'()*+,;=%") == std::string::npos;
+}
+
+/// Sanitize a file path for use in shell commands.
+static bool isSafePath(const std::string& s) {
+    return s.find_first_not_of("abcdefghijklmnopqrstuvwxyz0123456789.-_/:\\") == std::string::npos;
+}
+
+/// Try to download a file using the best available method.
+/// Returns true on success.
+static bool downloadFile(const std::string& url, const std::string& dest) {
+    if (!isSafeURL(url) || !isSafePath(dest)) {
+        std::cerr << "  [ERROR] Invalid download URL or path\n";
+        return false;
+    }
+
+    fs::path parent = fs::path(dest).parent_path();
+    if (!parent.empty()) fs::create_directories(parent);
+
+    std::cout << "  Downloading...\n";
+    std::cout << "    from: " << url << "\n";
+    std::cout << "    to  : " << dest << "\n\n";
+
+    auto exists_nonempty = [&]() { return fs::exists(dest) && fs::file_size(dest) > 0; };
+
+#ifdef _WIN32
+    // Method 1: Windows built-in URLDownloadToFile (zero dependencies)
+    {
+        typedef long (__stdcall *URLDownloadFn)(void*, const char*, const char*, int, void*);
+        HMODULE urlmon = LoadLibraryA("urlmon.dll");
+        if (urlmon) {
+            URLDownloadFn fn = (URLDownloadFn)GetProcAddress(urlmon, "URLDownloadToFileA");
+            if (fn) {
+                std::cout << "  Using Windows built-in downloader...\n";
+                long hr = fn(nullptr, url.c_str(), dest.c_str(), 0, nullptr);
+                FreeLibrary(urlmon);
+                if (hr == 0 && exists_nonempty()) return true;
+                std::cout << "  Windows downloader failed, trying aria2c...\n";
+            } else {
+                FreeLibrary(urlmon);
+            }
+        }
+    }
+
+    // Method 2: aria2c (fast, multi-connection)
+    {
+        std::string cmd = "aria2c -x 4 -s 4 -d \"" + parent.string()
+            + "\" -o \"" + fs::path(dest).filename().string()
+            + "\" \"" + url + "\"";
+        std::cout << "  Using aria2c...\n";
+        int ret = std::system(cmd.c_str());
+        if (ret == 0 && exists_nonempty()) return true;
+    }
+
+    // Method 3: curl
+    {
+        std::string part = dest + ".part";
+        std::string cmd = "curl -L --fail --progress-bar -o \"" + part + "\" \"" + url + "\"";
+        std::cout << "  Using curl...\n";
+        int ret = std::system(cmd.c_str());
+        if (ret == 0) {
+            std::rename(part.c_str(), dest.c_str());
+            if (exists_nonempty()) return true;
+        }
+    }
+
+    // Method 4: PowerShell
+    {
+        std::string cmd = "powershell -Command \"& {Invoke-WebRequest -Uri '" + url + "' -OutFile '" + dest + "'}\"";
+        std::cout << "  Using PowerShell...\n";
+        int ret = std::system(cmd.c_str());
+        if (ret == 0 && exists_nonempty()) return true;
+    }
+#else
+    // Method 1: aria2c (fast, multi-connection)
+    {
+        std::string cmd = "aria2c -x 4 -s 4 -d \"" + parent.string()
+            + "\" -o \"" + fs::path(dest).filename().string()
+            + "\" \"" + url + "\"";
+        std::cout << "  Using aria2c...\n";
+        int ret = std::system(cmd.c_str());
+        if (ret == 0 && exists_nonempty()) return true;
+    }
+
+    // Method 2: curl
+    {
+        std::string part = dest + ".part";
+        std::string cmd = "curl -L --fail --progress-bar -o \"" + part + "\" \"" + url + "\"";
+        std::cout << "  Using curl...\n";
+        int ret = std::system(cmd.c_str());
+        if (ret == 0) {
+            std::rename(part.c_str(), dest.c_str());
+            if (exists_nonempty()) return true;
+        }
+    }
+
+    // Method 3: wget
+    {
+        std::string cmd = "wget --show-progress -O \"" + dest + "\" \"" + url + "\"";
+        std::cout << "  Using wget...\n";
+        int ret = std::system(cmd.c_str());
+        if (ret == 0 && exists_nonempty()) return true;
+    }
+#endif
+
+    return false;
+}
+
 // ── Local model scanning ─────────────────────────────────────────
 
 struct LocalModel {
@@ -427,7 +555,7 @@ static void printModelMenu(const std::vector<SelectableModel>& all, const std::s
     }
 
     if ((int)all.size() > downloaded) {
-        std::cout << "  -- Downloadable models --\n";
+        std::cout << "  -- Downloadable models (auto-download on select) --\n";
         for (const auto& m : all) {
             if (m.downloaded) continue;
             std::cout << "  " << std::setw(2) << m.index << "  "
@@ -444,6 +572,37 @@ static void printModelMenu(const std::vector<SelectableModel>& all, const std::s
     std::cout << "\n  Download models: https://huggingface.co/ggerganov/whisper.cpp/tree/main\n";
 }
 
+/// Try to download a model and return the local path, or empty on failure.
+static std::string downloadAndGetPath(const SelectableModel& model) {
+    if (model.downloaded) return model.path;
+
+    std::string url = modelURL(model.name);
+    std::string dest = modelPath(model.name);
+
+    std::cout << "\n  Model '" << model.name << "' is not downloaded yet.\n";
+    std::cout << "  Size: " << model.size_str << "\n";
+    std::cout << "  Download now? [Y/n]: ";
+    std::cout.flush();
+
+    std::string input;
+    std::getline(std::cin, input);
+    if (!input.empty() && input != "y" && input != "Y" && input != "yes") {
+        std::cout << "  Skipping download.\n";
+        return "";
+    }
+
+    if (downloadFile(url, dest)) {
+        std::cout << "\n  Download complete!\n";
+        return dest;
+    }
+
+    std::cerr << "\n  [ERROR] Download failed.\n";
+    std::cerr << "  Try manually:\n";
+    std::cerr << "    ./scripts/download_model.sh " << model.name << "\n";
+    std::cerr << "    or: .\\scripts\\download_model.ps1 -Model " << model.name << "\n";
+    return "";
+}
+
 /// Show an interactive model picker and return the chosen path.
 /// Returns empty string if user cancelled.
 static std::string interactiveModelPicker(const std::vector<SelectableModel>& all) {
@@ -455,25 +614,42 @@ static std::string interactiveModelPicker(const std::vector<SelectableModel>& al
     std::string input;
     std::getline(std::cin, input);
 
-    // Default: use first local model (or first downloadable)
+    // Helper: resolve a selection to a SelectableModel
+    auto resolve = [&](const std::string& sel) -> const SelectableModel* {
+        // Try as index
+        char* end = nullptr;
+        long num = std::strtol(sel.c_str(), &end, 10);
+        if (end && *end == '\0' && num >= 1 && num <= (long)all.size())
+            return &all[num - 1];
+        // Try as name
+        for (const auto& m : all)
+            if (m.name == sel) return &m;
+        return nullptr;
+    };
+
+    const SelectableModel* selected = nullptr;
+
     if (input.empty()) {
-        return all.empty() ? "" : all[0].path;
+        // Default: first LOCAL model
+        for (const auto& m : all) {
+            if (m.downloaded) { selected = &m; break; }
+        }
+        if (!selected && !all.empty()) selected = &all[0];
+    } else {
+        selected = resolve(input);
     }
 
-    // Try as index
-    char* end = nullptr;
-    long num = std::strtol(input.c_str(), &end, 10);
-    if (end && *end == '\0' && num >= 1 && num <= (long)all.size()) {
-        return all[num - 1].path;
+    if (!selected) {
+        std::cerr << "  Invalid selection.\n";
+        return "";
     }
 
-    // Try as name
-    for (const auto& m : all) {
-        if (m.name == input) return m.path;
+    // If it's not downloaded, offer to download it
+    if (!selected->downloaded) {
+        return downloadAndGetPath(*selected);
     }
 
-    std::cerr << "  Invalid selection. Using default.\n";
-    return all.empty() ? "" : all[0].path;
+    return selected->path;
 }
 
 /// Print the downloadable models list (for --list-models).
@@ -560,13 +736,10 @@ static bool parse(int argc, char* argv[], Options& opt) {
                     if (selected.downloaded) {
                         opt.model_path = selected.path;
                     } else {
-                        // Selected model isn't downloaded yet
-                        std::cerr << "[ERROR] Model '" << selected.name
-                                  << "' is not downloaded.\n";
-                        std::cerr << "  Download it first:\n";
-                        std::cerr << "    ./scripts/download_model.sh " << selected.name << "\n";
-                        std::cerr << "    or: .\\scripts\\download_model.ps1 -Model " << selected.name << "\n";
-                        return false;
+                        // Selected model isn't downloaded — offer to download
+                        std::string path = downloadAndGetPath(selected);
+                        if (path.empty()) return false;
+                        opt.model_path = path;
                     }
                 }
             }
@@ -646,14 +819,22 @@ int main(int argc, char* argv[]) {
         for (const auto& m : all) if (m.downloaded) ++localCount;
 
         if (localCount == 0) {
-            // No models at all — show download list
-            std::cerr << "[ERROR] No model files found in the 'models/' directory.\n\n";
+            // No models at all — offer to download the default
+            std::cout << "[INFO] No model files found in the 'models/' directory.\n\n";
             printModelMenu(all);
-            std::cerr << "\n  Quick download:\n";
-            std::cerr << "    Linux/macOS: ./scripts/download_model.sh base.en\n";
-            std::cerr << "    Windows:     .\\scripts\\download_model.ps1 -Model base.en\n";
-            std::cerr << "    Manual:      https://huggingface.co/ggerganov/whisper.cpp/tree/main\n";
-            return 1;
+            if (!all.empty()) {
+                // auto-select the default (base.en)
+                const SelectableModel* def = nullptr;
+                for (const auto& m : all)
+                    if (m.name == "base.en") { def = &m; break; }
+                if (!def) def = &all[0];
+
+                std::string path = downloadAndGetPath(*def);
+                if (path.empty()) return 1;
+                opt.model_path = path;
+            } else {
+                return 1;
+            }
         }
 
         // Local models exist — show picker
