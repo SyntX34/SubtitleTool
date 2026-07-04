@@ -88,11 +88,12 @@ jobs:
 
       - name: Install Vulkan SDK
         run: |
-          # Ensure the keyrings directory exists (needed on some Ubuntu runner images)
-          sudo mkdir -p /etc/apt/keyrings
-          wget -qO- https://packages.lunarg.com/lunarg-signing-key-pub.asc | sudo tee /etc/apt/keyrings/lunarg.asc > /dev/null
-          sudo wget -qO /etc/apt/sources.list.d/lunarg-vulkan-$(lsb_release -cs).list \
-            https://packages.lunarg.com/vulkan/lunarg-vulkan-$(lsb_release -cs).list
+          # Download the LunarG signing key and convert to the format apt expects
+          curl -fsSL https://packages.lunarg.com/lunarg-signing-key-pub.asc | \
+            sudo gpg --dearmor -o /usr/share/keyrings/lunarg-archive-keyring.gpg
+          # Add the LunarG repository with the signed-by option (required on Ubuntu 24.04+)
+          echo "deb [arch=amd64 signed-by=/usr/share/keyrings/lunarg-archive-keyring.gpg] https://packages.lunarg.com/vulkan $(lsb_release -cs) main" | \
+            sudo tee /etc/apt/sources.list.d/lunarg-vulkan.list > /dev/null
           sudo apt-get update
           sudo apt-get install -y vulkan-sdk
 
